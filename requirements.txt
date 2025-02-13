@@ -1,0 +1,9 @@
+ipykernel
+matplotlib==3.9.2
+numpy
+pandas==2.2.3
+scikit-learn==1.5.2
+seaborn==0.13.2
+tensorflow[and-cuda]==2.18.0
+tqdm==4.67.0
+wandb==0.18.6
