@@ -169,3 +169,14 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Custom Exclusions
+.DS_Store
+
+data/*
+wandb/
+
+*.csv
+*.model.keras
+*.keras
+!placeholder.keras
