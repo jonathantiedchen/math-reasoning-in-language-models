@@ -57,8 +57,8 @@ else
 fi
 
 # Clone the repository if not already cloned
-REPO_DIR="math_reasoning_language_models"  # Replace with your actual repo name
-REPO_URL="https://github.com/jonathantiedchen/math_reasoning_language_models.git"  # Replace with your repo URL
+REPO_DIR="math-reasoning-in-language-models"  # Replace with your actual repo name
+REPO_URL="https://github.com/jonathantiedchen/math-reasoning-in-language-models.git"  # Replace with your repo URL
 
 if [ ! -d "$REPO_DIR" ]; then
     echo_info "Cloning repository from GitHub..."
