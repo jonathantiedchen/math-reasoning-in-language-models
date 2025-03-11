@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
-# init.sh
+#!/bin/bash
 
 # Exit immediately if a command exits with a non-zero status
-set -e
+#set -e
+
 
 # Function to display info messages
 function echo_info {
@@ -48,14 +48,6 @@ else
     exit 1
 fi
 
-echo_info "Checking GPU availability..."
-if command -v nvidia-smi > /dev/null 2>&1; then
-    echo_info "NVIDIA GPU found:"
-    nvidia-smi
-else
-    echo_error "No GPU detected or driver missing."
-fi
-
 # Clone the repository if not already cloned
 REPO_DIR="math-reasoning-in-language-models"  # Replace with your actual repo name
 REPO_URL="https://github.com/jonathantiedchen/math-reasoning-in-language-models.git"  # Replace with your repo URL
@@ -66,7 +58,6 @@ if [ ! -d "$REPO_DIR" ]; then
 else
     echo_info "Repository already cloned. Pulling latest changes..."
     cd "$REPO_DIR"
-    git reset --hard HEAD
     git pull
 fi
 
@@ -79,7 +70,7 @@ else
 fi
 
 # Change to repository directory
-# cd "$REPO_DIR"
+cd "$REPO_DIR"
 
 # Activate virtual environment
 echo_info "Activating virtual environment..."
@@ -92,10 +83,5 @@ pip install --upgrade pip
 # Install requirements
 echo_info "Installing dependencies..."
 pip install -r requirements.txt
-
-# Ensuring reproducibility
-echo_info "Setting environment variable for reproducibility..."
-export TF_DETERMINISTIC_OPS=1
-export TF_CUDNN_DETERMINISTIC=1
 
 echo_info "Initialization complete."
