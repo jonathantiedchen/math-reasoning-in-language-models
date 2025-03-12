@@ -155,8 +155,8 @@ def create_cot_prompt(train_examples, question, n_shot=8):
         prompt += f"Answer: {ex['answer']}\n\n"
     
     # Add the current question
-    prompt += f"Question: {question}\n"
-    prompt += f"Let's think step by step to solve this problem. After solving, you MUST provide the final answer as an integer after '####'.\n"
+    prompt += f"Question: {question} Let's think step by step. At the end, you MUST write the answer as an integer after '####'. Ensure your answer is fully written before stopping.\n"
+
     
     return prompt
 
@@ -169,7 +169,9 @@ def generate_answer_hf(model, tokenizer, prompt, config, DEVICE, model_type="def
     input_length = inputs["input_ids"].shape[1]
     
     # Set max tokens based on model type
-    if model_type == "gpt2":
+    if config["max_context"]: 
+        max_context=config["max_length"]
+    elif model_type == "gpt2":
         max_context = 1024
     elif "deepseek" in model_type:
         max_context = 4096
