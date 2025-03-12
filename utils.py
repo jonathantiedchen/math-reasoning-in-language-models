@@ -1,0 +1,191 @@
+from datasets import load_dataset
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+import random
+import re
+
+def get_device():
+    DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    return DEVICE
+
+def load_gsm8k(config):
+    print("Loading GSM8K dataset...")
+    dataset = load_dataset("gsm8k", "main")
+    # Get both train and test sets
+    train_set = dataset["train"]
+    test_set = dataset["test"]
+    
+    if config["num_samples"]:
+        # Randomly sample a subset if num_samples is specified
+        indices = np.random.choice(len(test_set), min(config["num_samples"], len(test_set)), replace=False)
+        test_set = test_set.select(indices)
+    
+    print(f"Loaded {len(train_set)} training examples and {len(test_set)} test examples")
+    return train_set, test_set
+
+def load_model(config,DEVICE):
+    print(f"Loading {config['model_name']} model and tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(config["model_name"], use_fast=True)
+    model = AutoModelForCausalLM.from_pretrained(config["model_name"])
+    
+    # Handle padding token if not already set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = model.config.eos_token_id
+    
+    model.to(DEVICE)
+    return model, tokenizer
+
+def extract_answer(text, eos=None):
+    """
+    Extracts a numerical answer from model output text.
+    
+    Args:
+        text (str): The model-generated text containing an answer
+        eos (str, optional): Custom end-of-sequence marker
+    
+    Returns:
+        float or None: The extracted numerical answer or None if not found
+    """
+    # Handle custom EOS marker if provided
+    if eos and eos in text:
+        text = text.split(eos)[0].strip()
+    
+    # Primary method: extract after #### delimiter
+    if "####" in text:
+        answer_part = text.split("####")[-1].strip()
+        
+        # Clean the answer part
+        answer_part = clean_text_for_number_extraction(answer_part)
+        
+        # Extract the numerical answer
+        numbers = re.findall(r'[-+]?\d*\.?\d+', answer_part)
+        if numbers:
+            return convert_to_number(numbers[0])
+    
+    # Secondary method: look for the default EOS marker
+    if "<|endoftext|>" in text:
+        parts = text.split("<|endoftext|>")
+        for part in reversed(parts):  # Start from the end
+            clean_part = clean_text_for_number_extraction(part)
+            numbers = re.findall(r'[-+]?\d*\.?\d+', clean_part)
+            if numbers:
+                return convert_to_number(numbers[0])
+    
+    # Fallback: extract the last number in the full text
+    cleaned_text = clean_text_for_number_extraction(text)
+    numbers = re.findall(r'[-+]?\d*\.?\d+', cleaned_text)
+    if numbers:
+        return convert_to_number(numbers[-1])
+    
+    # If no number found
+    return None
+
+def clean_text_for_number_extraction(text):
+    """
+    Cleans text to prepare for number extraction.
+    
+    Args:
+        text (str): Text to clean
+    
+    Returns:
+        str: Cleaned text
+    """
+    # Remove thousand separators, currency symbols, and percentages
+    text = re.sub(r'[$€£¥,]', '', text)
+    # Remove units of measurement that follow numbers
+    text = re.sub(r'(\d+)\s*(?:dollars|USD|euros|EUR|pounds|GBP|yen|JPY|yuan|CNY|rupees|INR|%|percent|units|kg|g|mg|m|cm|mm|km|mph|lbs|oz|inches|feet|ft|tons|hours|hrs|minutes|mins|seconds|secs)', r'\1', text)
+    return text
+
+def convert_to_number(num_str):
+    """
+    Converts a string to the appropriate number type (int or float).
+    
+    Args:
+        num_str (str): String representing a number
+    
+    Returns:
+        int or float: The converted number
+    """
+    try:
+        # Try to convert to int first if it's a whole number
+        value = float(num_str)
+        if value.is_integer():
+            return int(value)
+        return value
+    except ValueError:
+        # If conversion fails, return the original string
+        return num_str
+    
+# Create 8-shot chain-of-thought prompt
+def create_cot_prompt(train_examples, question, n_shot=8):
+    # Set random seed for reproducibility
+    random.seed(42)
+    
+    # Sample n examples from the training set
+    shot_examples = random.sample(train_examples, n_shot)
+    
+    # Build the few-shot prompt
+    prompt = ""
+    for ex in shot_examples:
+        # Add the question
+        prompt += f"Question: {ex['question']}\n"
+        
+        # Add the answer with reasoning
+        # Extract the answer part, assuming it contains the reasoning steps
+        prompt += f"Answer: {ex['answer']}\n\n"
+    
+    # Add the current question
+    prompt += f"Question: {question}\n"
+    prompt += f"Answer: Let's think step by step to solve this problem. After solving, I'll provide the final answer after ####.\n"
+    
+    return prompt
+
+
+def generate_answer_hf(model, tokenizer, prompt, config, DEVICE, model_type="default"):
+    # Prepare inputs
+    inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(DEVICE)
+    
+    # Get input length to respect model's context window
+    input_length = inputs["input_ids"].shape[1]
+    
+    # Set max tokens based on model type
+    if model_type == "gpt2":
+        max_context = 1024
+    elif "deepseek" in model_type:
+        max_context = 4096
+    else:
+        max_context = 2048  # Safe default
+    
+    max_new_tokens = min(config["max_length"], max_context - input_length)
+    
+    # Generate text
+    with torch.no_grad():
+        output = model.generate(
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=max_new_tokens,  # Use max_new_tokens instead of max_length
+            temperature=config["temperature"],
+            top_p=config["top_p"],
+            num_beams=config["num_beams"],
+            num_return_sequences=1,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    
+    # Decode the output
+    response = tokenizer.decode(output[0], skip_special_tokens=True)
+    
+    # Extract response based on model type
+    if model_type in ["llama", "deepseek", "qwen"]:
+        # For chat models that might include prefixes
+        try:
+            generated_text = response.split("Answer:")[-1].strip()
+        except:
+            # Handle uncommon formats
+            generated_text = response[len(prompt):].strip()
+    else:
+        # Default extraction
+        generated_text = response[len(prompt):].strip()
+    
+    return generated_text
