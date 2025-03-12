@@ -39,7 +39,7 @@ def load_model(config,DEVICE):
 
 def extract_answer(text, eos=None):
     """
-    Extracts a numerical answer from model output text.
+    Extracts a numerical answer from model output text, ensuring it returns a float.
     
     Args:
         text (str): The model-generated text containing an answer
@@ -62,7 +62,7 @@ def extract_answer(text, eos=None):
         # Extract the numerical answer
         numbers = re.findall(r'[-+]?\d*\.?\d+', answer_part)
         if numbers:
-            return convert_to_number(numbers[0])
+            return float(numbers[0])  # Always return as float
     
     # Secondary method: look for the default EOS marker
     if "<|endoftext|>" in text:
@@ -71,16 +71,34 @@ def extract_answer(text, eos=None):
             clean_part = clean_text_for_number_extraction(part)
             numbers = re.findall(r'[-+]?\d*\.?\d+', clean_part)
             if numbers:
-                return convert_to_number(numbers[0])
+                return float(numbers[0])  # Always return as float
     
     # Fallback: extract the last number in the full text
     cleaned_text = clean_text_for_number_extraction(text)
     numbers = re.findall(r'[-+]?\d*\.?\d+', cleaned_text)
     if numbers:
-        return convert_to_number(numbers[-1])
+        return float(numbers[-1])  # Always return as float
     
     # If no number found
     return None
+
+# Also update the evaluation is_correct check to:
+def is_correct_check(predicted, target):
+    """Safe comparison function for numerical answers"""
+    if predicted is None or target is None:
+        return False
+        
+    # Ensure both are floats
+    float_predicted = float(predicted)
+    float_target = float(target)
+    
+    # For whole numbers, check exact match
+    if float_predicted == int(float_predicted) and float_target == int(float_target):
+        return int(float_predicted) == int(float_target)
+    else:
+        # For floating point, allow small relative error
+        relative_error = abs(float_predicted - float_target) / (abs(float_target) + 1e-10)
+        return relative_error < 0.01  # 1% relative error tolerance
 
 def clean_text_for_number_extraction(text):
     """
@@ -138,7 +156,7 @@ def create_cot_prompt(train_examples, question, n_shot=8):
     
     # Add the current question
     prompt += f"Question: {question}\n"
-    prompt += f"Answer: Let's think step by step to solve this problem. After solving, I'll provide the final answer after ####.\n"
+    prompt += f"Let's think step by step to solve this problem. After solving, you MUST provide the final answer as an integer after '####'.\n"
     
     return prompt
 
@@ -160,18 +178,23 @@ def generate_answer_hf(model, tokenizer, prompt, config, DEVICE, model_type="def
     
     max_new_tokens = min(config["max_length"], max_context - input_length)
     
+    # Enable sampling for GPT-2 (to fix the warnings and improve diversity)
+    generation_config = {
+        "input_ids": inputs["input_ids"],
+        "attention_mask": inputs["attention_mask"],
+        "max_new_tokens": max_new_tokens,
+        "do_sample": True,  # Enable sampling
+        "temperature": config["temperature"],
+        "top_p": config["top_p"],
+        "num_return_sequences": 1,
+        "pad_token_id": tokenizer.pad_token_id,
+        "repetition_penalty": 1.2,  # Add repetition penalty
+        "no_repeat_ngram_size": 3,  # Prevent repetition of 3-grams
+    }
+
     # Generate text
     with torch.no_grad():
-        output = model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_new_tokens=max_new_tokens,  # Use max_new_tokens instead of max_length
-            temperature=config["temperature"],
-            top_p=config["top_p"],
-            num_beams=config["num_beams"],
-            num_return_sequences=1,
-            pad_token_id=tokenizer.pad_token_id,
-        )
+        output = model.generate(**generation_config)
     
     # Decode the output
     response = tokenizer.decode(output[0], skip_special_tokens=True)
