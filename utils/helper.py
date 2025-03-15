@@ -137,7 +137,7 @@ def convert_to_number(num_str):
         return num_str
     
 # Create 8-shot chain-of-thought prompt
-def create_cot_prompt(train_examples, question, n_shot=8):
+def create_cot_prompt(train_examples, n_shot=8):
     # Set random seed for reproducibility
     random.seed(42)
     
@@ -153,10 +153,6 @@ def create_cot_prompt(train_examples, question, n_shot=8):
         # Add the answer with reasoning
         # Extract the answer part, assuming it contains the reasoning steps
         prompt += f"Answer: {ex['answer']}\n\n"
-    
-    # Add the current question
-    prompt += f"Question: {question} Let's think step by step. At the end, you MUST write the answer as an integer after '####'. Ensure your answer is fully written before stopping.\n"
-
     
     return prompt
 
@@ -214,3 +210,18 @@ def generate_answer_hf(model, tokenizer, prompt, config, DEVICE, model_type="def
         generated_text = response[len(prompt):].strip()
     
     return generated_text
+
+# Function to extract the numerical answer
+def extract_answer_gsm8k(text):
+    if "####" in text:
+        answer_part = text.split("####")[-1].strip()
+        numbers = re.findall(r'[-+]?\d*\.?\d+', answer_part)
+        if numbers:
+            return float(numbers[0])
+    
+    # Fallback: extract the last number in the full text
+    numbers = re.findall(r'[-+]?\d*\.?\d+', text)
+    if numbers:
+        return float(numbers[-1])
+    
+    return None
