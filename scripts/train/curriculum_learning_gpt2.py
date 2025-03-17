@@ -43,11 +43,10 @@ from utils.helper import get_device
 """
 Datasets which will be used, in correct order
 - Original Datasets: 
-    AQuA (unilevel) -> includes reasoning column, probably too difficult for GPT2 https://github.com/google-deepmind/AQuA 
-    SVAMP (elementary) - https://github.com/arkilpatel/SVAMP?tab=readme-ov-file
+    SVAMP (elementary) - https://github.com/arkilpatel/SVAMP?tab=readme-ov-file + ASDiv https://github.com/chaochun/nlu-asdiv-dataset/tree/master
     DMath (middle) - https://github.com/JiwooKimAR/dmath 
     Mathematics Dataset (High School) - https://github.com/google-deepmind/mathematics_dataset
-    Dolphin18K (Multiple) - https://www.kaggle.com/datasets/saurabhshahane/sigmadolphin
+
 - Curated Datasets:
     ParaMAWPS - https://huggingface.co/datasets/Starscream-11813/ParaMAWPS
     MetaMathQA - filter out gsm8k https://huggingface.co/datasets/meta-math/MetaMathQA

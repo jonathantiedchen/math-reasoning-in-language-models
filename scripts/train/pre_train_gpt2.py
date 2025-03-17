@@ -55,8 +55,8 @@ def main():
     # Load model and tokenizer
     model_name = config['model_name']
     print(f"Loading pre-trained model: {model_name}")
-    tokenizer = AutoModelForCausalLM.from_pretrained(model_name)
-    model = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
     
     # Set padding token
     tokenizer.pad_token = tokenizer.eos_token # End-of-Sequence (EOS) token as the padding token for the tokenizer.
