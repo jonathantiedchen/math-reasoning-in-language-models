@@ -43,19 +43,17 @@ from utils.helper import get_device
 """
 Datasets which will be used, in correct order
 - Original Datasets: 
-    SVAMP (elementary) - https://github.com/arkilpatel/SVAMP?tab=readme-ov-file + ASDiv https://github.com/chaochun/nlu-asdiv-dataset/tree/master
-    DMath (middle) - https://github.com/JiwooKimAR/dmath 
+    ASDiv (elementary) https://github.com/chaochun/nlu-asdiv-dataset/tree/master
+    ParaMAWPS (elementary) - https://huggingface.co/datasets/Starscream-11813/ParaMAWPS
+    SVAMP (elementary based on ASDiv and MAWPS but harder than ASDiv) - https://github.com/arkilpatel/SVAMP?tab=readme-ov-file  
+    DMath (Middle School) - https://github.com/JiwooKimAR/dmath 
+    AQUA (High School) - https://github.com/google-deepmind/AQuA
     Mathematics Dataset (High School) - https://github.com/google-deepmind/mathematics_dataset
-
-- Curated Datasets:
-    ParaMAWPS - https://huggingface.co/datasets/Starscream-11813/ParaMAWPS
-    MetaMathQA - filter out gsm8k https://huggingface.co/datasets/meta-math/MetaMathQA
-    Lila - https://github.com/allenai/Lila
 """
 
 ## Train GPT2 
 """
-Code to train GPT2all weights should be trained
+Code to train GPT2. All weights should be trained.
 """
 
 ## Save model so later use in 
