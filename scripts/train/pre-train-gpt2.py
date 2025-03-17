@@ -1,19 +1,26 @@
 """
 Train GPT-2 on OpenWebMath dataset using streaming to avoid downloading the full dataset.
-Integrates Weights & Biases (wandb) for experiment tracking.
+Integrates Weights & Biases (wandb) for tracking.
 """
 
 import os
 import torch
 import wandb
+import sys
 from transformers import (
-    GPT2LMHeadModel, 
-    GPT2TokenizerFast, 
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
     TrainingArguments, 
     Trainer, 
     DataCollatorForLanguageModeling
 )
 from datasets import load_dataset
+
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from utils.helper import get_device
 
 def main():
 
@@ -43,15 +50,7 @@ def main():
     )
 
     # Check for available hardware
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print(f"Using CUDA: {torch.cuda.get_device_name(0)}")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Using MPS (Apple Silicon)")
-    else:
-        device = torch.device("cpu")
-        print("Using CPU (no GPU detected)")
+    device = get_device()
     
     # Load model and tokenizer
     model_name = config['model_name']
@@ -110,7 +109,7 @@ def main():
         logging_steps=100, # Log training metrics every 100 steps
         logging_dir="./logs", # Directory where training logs will be written
         fp16=torch.cuda.is_available(),  # Use mixed precision training if a GPU is available
-        learning_rate=5e-5, # initial learning rate for the optimizer 
+        learning_rate=config["learning_rate"], # initial learning rate for the optimizer 
         weight_decay=0.01, # L2 regularization strength to prevent overfitting
         warmup_steps=500, # Gradually increase the learning rate from 0 to the specified learning rate over the first 500 steps -> stabilizes early training
         # Streaming mode specific settings
