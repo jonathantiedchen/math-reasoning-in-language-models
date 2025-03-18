@@ -27,11 +27,11 @@ dataset_names = ["ASDiv", "ParaMAWPS", "SVAMP", "DMath", "AQuA"]
 
 # Dictionary mapping dataset file paths to their respective loading functions
 data_loaders = {
-    data_paths[0]: load_asdiv_data(),
-    data_paths[1]: load_paramawps_data(),
-    data_paths[2]: load_svamp_data(),
-    data_paths[3]: load_dmath_data(),
-    data_paths[4]: load_aqua_data()
+    data_paths[0]: load_asdiv_data,
+    data_paths[1]: load_paramawps_data,
+    data_paths[2]: load_svamp_data,
+    data_paths[3]: load_dmath_data,
+    data_paths[4]: load_aqua_data
 }
 
 def curriculum_training():
@@ -41,20 +41,22 @@ def curriculum_training():
         "base_artifact": "master_thesis_math_lm/gpt2-math/gpt2-math-model:v0",
         "learning_rate": 5e-5,
         "weight_decay": 0.01,
-        "epochs_per_dataset": 3,
+        "epochs_per_dataset": 2,  # Reduced epochs for testing
         "batch_size": 4,
         "gradient_accumulation_steps": 4,
         "fp16": True,
         "datasets": dataset_names,
         "curriculum_order": dataset_names,
         "seed": 42,
-        "evaluation": "external_gsm8k"  # Indicating evaluation happens externally
+        "samples_per_dataset": 5,  # Only use 5 samples per dataset for testing
+        "evaluation": "external_gsm8k",
+        "test_mode": True  # Flag to indicate this is a test run
     }
     
     # Initialize wandb with config
     run = wandb.init(
         project="gpt-math", 
-        name="gpt2-math-curr",
+        name="gpt2-math-curr-test-run",
         config=config
     )
     
@@ -77,20 +79,20 @@ def curriculum_training():
     
     # Training arguments from config
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir="./test_results",
         overwrite_output_dir=True,
         num_train_epochs=config["epochs_per_dataset"],
         per_device_train_batch_size=config["batch_size"],
         gradient_accumulation_steps=config["gradient_accumulation_steps"],
-        save_steps=500,
-        save_total_limit=2,
-        logging_dir="./logs",
-        logging_steps=100,
+        save_steps=10,  # More frequent saving for testing
+        save_total_limit=1,  # Save less checkpoints to save space
+        logging_dir="./test_logs",
+        logging_steps=5,  # More frequent logging for testing
         learning_rate=config["learning_rate"],
         weight_decay=config["weight_decay"],
         fp16=config["fp16"],
         report_to="wandb",
-        dataloader_num_workers=4,
+        dataloader_num_workers=2,  # Reduced for testing
     )
     
     # Curriculum training loop
@@ -100,8 +102,11 @@ def curriculum_training():
         # Load the dataset
         data = data_loaders[data_path](data_path)
         
-        # No need to split data for validation - use all for training
-        train_data = data
+        # Shuffle and limit to specified number of samples
+        random.shuffle(data)
+        train_data = data[:config["samples_per_dataset"]]
+        
+        print(f"Using {len(train_data)} samples from {dataset_name} (limited for testing)")
         
         # Prepare the dataset
         train_dataset = prepare_dataset(train_data, tokenizer)
@@ -132,37 +137,36 @@ def curriculum_training():
         })
         
         # Save model checkpoint after training on this dataset
-        model_path = f"./checkpoints/gpt2-math-after-{dataset_name}"
+        model_path = f"./test_checkpoints/gpt2-test-after-{dataset_name}"
         print(f"Saving model checkpoint after {dataset_name} to {model_path}")
         model.save_pretrained(model_path)
         tokenizer.save_pretrained(model_path)
         
         # Log model checkpoint to wandb
         checkpoint_artifact = wandb.Artifact(
-            f"gpt2-math-after-{dataset_name}", 
+            f"gpt2-test-after-{dataset_name}", 
             type="model",
-            description=f"GPT-2 Math model after training on {dataset_name}"
+            description=f"Test GPT-2 Math model after training on {dataset_name}"
         )
         checkpoint_artifact.add_dir(model_path)
         run.log_artifact(checkpoint_artifact)
         
         # Log a summary of the model's training on this dataset
-        wandb.run.summary[f"{dataset_name}_trained"] = True
-        wandb.run.summary[f"{dataset_name}_training_completed"] = True
+        wandb.run.summary[f"{dataset_name}_tested"] = True
         
-        print(f"Completed curriculum stage {stage+1}: {dataset_name} - Model saved and logged to wandb")
+        print(f"Completed test curriculum stage {stage+1}: {dataset_name}")
     
     # Save the final model
-    final_model_path = "./checkpoints/gpt2-math-curriculum-final"
-    print(f"Saving final model to {final_model_path}")
+    final_model_path = "./test_checkpoints/gpt2-test-curriculum-final"
+    print(f"Saving final test model to {final_model_path}")
     model.save_pretrained(final_model_path)
     tokenizer.save_pretrained(final_model_path)
     
     # Log final model to wandb
     final_artifact = wandb.Artifact(
-        "gpt2-math-curriculum-final", 
+        "gpt2-test-curriculum-final", 
         type="model",
-        description="Final GPT-2 Math model after complete curriculum learning"
+        description="Final test GPT-2 Math model after curriculum learning"
     )
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
@@ -172,30 +176,21 @@ def curriculum_training():
         {
             "Stage": i+1, 
             "Dataset": dataset_name, 
-            "Checkpoint Location": f"./checkpoints/gpt2-math-after-{dataset_name}",
-            "WandB Artifact": f"gpt2-math-after-{dataset_name}"
+            "Samples Used": config["samples_per_dataset"],
+            "Checkpoint Location": f"./test_checkpoints/gpt2-test-after-{dataset_name}"
         } 
         for i, dataset_name in enumerate(dataset_names)
     ]
-    checkpoint_summary.append({
-        "Stage": "Final",
-        "Dataset": "All Datasets",
-        "Checkpoint Location": final_model_path,
-        "WandB Artifact": "gpt2-math-curriculum-final"
-    })
     
     # Log the summary table to wandb
     checkpoint_table = wandb.Table(
-        columns=["Stage", "Dataset", "Checkpoint Location", "WandB Artifact"],
-        data=[[item["Stage"], item["Dataset"], item["Checkpoint Location"], item["WandB Artifact"]] 
+        columns=["Stage", "Dataset", "Samples Used", "Checkpoint Location"],
+        data=[[item["Stage"], item["Dataset"], item["Samples Used"], item["Checkpoint Location"]] 
               for item in checkpoint_summary]
     )
-    wandb.log({"model_checkpoints": checkpoint_table})
+    wandb.log({"test_checkpoints": checkpoint_table})
     
-    # Add note about external evaluation
-    wandb.run.notes = "This model will be evaluated externally on GSM8K benchmark."
-    
-    print("Curriculum training completed successfully!")
+    print("Test curriculum training completed successfully!")
     return model, tokenizer
 
 if __name__ == "__main__":
@@ -207,13 +202,15 @@ if __name__ == "__main__":
     random.seed(seed)
     
     # Ensure output directories exist
-    os.makedirs("./results", exist_ok=True)
-    os.makedirs("./logs", exist_ok=True)
-    os.makedirs("./checkpoints", exist_ok=True)
+    os.makedirs("./test_results", exist_ok=True)
+    os.makedirs("./test_logs", exist_ok=True)
+    os.makedirs("./test_checkpoints", exist_ok=True)
     
     # Create dataset-specific checkpoint directories
     for dataset_name in dataset_names:
-        os.makedirs(f"./checkpoints/gpt2-math-after-{dataset_name}", exist_ok=True)
+        os.makedirs(f"./test_checkpoints/gpt2-test-after-{dataset_name}", exist_ok=True)
+    
+    print("Starting test curriculum training with 5 samples per dataset...")
     
     # Run the curriculum training
     model, tokenizer = curriculum_training()
