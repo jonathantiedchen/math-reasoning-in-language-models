@@ -173,7 +173,7 @@ cython_debug/
 # Custom Exclusions
 .DS_Store
 
-data/*
+data/data_local/*
 wandb/
 artifacts/*
 
