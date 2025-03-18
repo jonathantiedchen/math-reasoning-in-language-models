@@ -1,5 +1,6 @@
 """
 Instruction fine-tuning for a pre-trained GPT-2 math model using MathInstruct dataset.
+Loads the base model from wandb artifacts.
 Allows filtering by source, limiting sample count, and uses streaming for efficiency.
 Integrates Weights & Biases (wandb) for tracking.
 """
@@ -17,6 +18,15 @@ from transformers import (
 )
 from datasets import load_dataset
 from collections import Counter
+
+# Define this filter function outside main() so it can be pickled properly
+def exclude_sources_by_prefix(example, prefixes_to_exclude):
+    """Filter function to exclude sources starting with specified prefixes."""
+    source = example["source"]
+    for prefix in prefixes_to_exclude:
+        if source.startswith(prefix):
+            return False
+    return True
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
@@ -37,11 +47,11 @@ except ImportError:
 def main():
     # create wandb config to log parameter
     config = {
-        "model_name": "gpt2-math-curr",  # Your pre-trained model
-        "output_model_name": "gpt2-math-curr-instruct",  # Name for the fine-tuned model
+        "model_name": "gpt2-math-model",  # The artifact name in wandb
+        "output_model_name": "gpt2-math-instruct",  # Name for the fine-tuned model
         "dataset": "TIGER-Lab/MathInstruct",
         "streaming": True,
-        "shuffle_buffer": 5000,  # Buffer size for better mixing
+        "shuffle_buffer": 10000,  # Buffer size for better mixing
         "max_length": 1024,
         "max_steps": 50000,            
         "learning_rate": 5e-5,         
@@ -50,7 +60,8 @@ def main():
         "num_workers": 4,              
         "prefetch_factor": 2,          
         "max_samples": 50000,          # Maximum number of samples to use
-        "sources_to_exclude": [],      # Empty means exclude none (populated later)
+        "sources_to_exclude": ["data/PoT/"],      # Use just the prefix to exclude all PoT sources
+        "wandb_artifact_path": "master_thesis_math_lm/gpt2-math/gpt2-math-model:v0",  # Path to the artifact
     }
 
     # Set the output directories
@@ -69,11 +80,15 @@ def main():
     device = get_device()
     print(f"Using device: {device}")
     
-    # Load model and tokenizer
-    model_name = config['model_name']
-    print(f"Loading pre-trained model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    # Load model from wandb artifact
+    print(f"Loading pre-trained model from wandb artifact: {config['wandb_artifact_path']}")
+    artifact = run.use_artifact(config['wandb_artifact_path'])
+    model_dir = artifact.download()
+    
+    # Load tokenizer and model from the downloaded directory
+    print(f"Loading model and tokenizer from {model_dir}")
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    model = AutoModelForCausalLM.from_pretrained(model_dir)
     
     # Set padding token directly
     tokenizer.pad_token = tokenizer.eos_token
@@ -117,8 +132,12 @@ def main():
     train_dataset = dataset["train"]
     
     if config["sources_to_exclude"]:
-        print(f"Filtering to exclude the following sources: {config['sources_to_exclude']}")
-        train_dataset = train_dataset.filter(lambda example: example["source"] not in config["sources_to_exclude"])
+        print(f"Filtering to exclude sources starting with: {config['sources_to_exclude']}")
+        # Define a proper function to use with filter (avoid using lambda)
+        def filter_function(example):
+            return exclude_sources_by_prefix(example, config["sources_to_exclude"])
+        
+        train_dataset = train_dataset.filter(filter_function)
     
     # Shuffle the dataset using buffer
     shuffle_buffer_size = config['shuffle_buffer']
@@ -197,7 +216,7 @@ def main():
         bf16=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8,  # Use BF16 on Ampere or newer GPUs
         bf16_full_eval=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8,  # Use BF16 during evaluation as well
         fp16=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 8,  # Fallback to FP16 on older GPUs
-        dataloader_num_workers=config["num_workers"],   # Number of CPU workers for data loading
+        dataloader_num_workers=0,                       # Fix the pickling issue by disabling multiprocessing (or set to 0)
         dataloader_pin_memory=True,                     # Pin memory in CPU to accelerate CPU to GPU transfer
         learning_rate=config["learning_rate"],          # Initial learning rate for the optimizer
         weight_decay=0.01,                              # L2 regularization factor to prevent overfitting
