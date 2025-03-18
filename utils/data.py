@@ -1,6 +1,11 @@
 import requests
 import os
 import json
+import logging
+from datasets import Dataset as HFDataset
+import xml.etree.ElementTree as ET
+
+
 
 # Function to download GSM8K dataset from GitHub
 def download_gsm8k():
@@ -46,3 +51,134 @@ def load_gsm8k_from_file():
     
     print(f"Loaded {len(train_data)} training examples and {len(test_data)} test examples")
     return train_data, test_data
+
+# Data loading functions for each dataset format
+def load_asdiv_data(file_path):
+    """Load and parse ASDiv XML data"""
+    tree = ET.parse(file_path)
+    root = tree.getroot()
+    problems = []
+    
+    for problem in root.findall(".//Problem"):
+        question_elem = problem.find("Question")
+        answer_elem = problem.find("Answer")
+        
+        if question_elem is not None and answer_elem is not None:
+            question = question_elem.text.strip()
+            answer = answer_elem.text.strip()
+            
+            # Check if there's a solution/working
+            solution_elem = problem.find("Solution")
+            solution = solution_elem.text.strip() if solution_elem is not None else ""
+            
+            # Format the text
+            if solution:
+                text = f"Question: {question}\nSolution: {solution}\nAnswer: {answer}"
+            else:
+                text = f"Question: {question}\nAnswer: {answer}"
+                
+            problems.append({"text": text})
+    
+    print(f"Loaded {len(problems)} problems from ASDiv")
+    return problems
+
+def load_paramawps_data(file_path):
+    """Load and parse ParaMAWPS JSON data"""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    
+    problems = []
+    for item in data:
+        question = item.get("original_text", "").strip()
+        equation = item.get("equation", "").strip()
+        answer = str(item.get("answer", "")).strip()
+        
+        text = f"Question: {question}\nEquation: {equation}\nAnswer: {answer}"
+        problems.append({"text": text})
+    
+    print(f"Loaded {len(problems)} problems from ParaMAWPS")
+    return problems
+
+def load_svamp_data(file_path):
+    """Load and parse SVAMP JSON data"""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    
+    problems = []
+    for item in data:
+        question = item.get("Body", "") + " " + item.get("Question", "")
+        question = question.strip()
+        answer = str(item.get("Answer", "")).strip()
+        
+        text = f"Question: {question}\nAnswer: {answer}"
+        problems.append({"text": text})
+    
+    print(f"Loaded {len(problems)} problems from SVAMP")
+    return problems
+
+def load_dmath_data(file_path):
+    """Load and parse DMath JSON data"""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    
+    problems = []
+    for item in data:
+        question = item.get("problem", "").strip()
+        solution = item.get("solution", "").strip()
+        answer = item.get("answer", "").strip()
+        
+        text = f"Question: {question}\nSolution: {solution}\nAnswer: {answer}"
+        problems.append({"text": text})
+    
+    print(f"Loaded {len(problems)} problems from DMath")
+    return problems
+
+def load_aqua_data(file_path):
+    """Load and parse AQuA JSON data"""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    
+    problems = []
+    for item in data:
+        question = item.get("question", "").strip()
+        options = item.get("options", [])
+        rationale = item.get("rationale", "").strip()
+        correct = item.get("correct", "")
+        
+        # Format options
+        options_text = ""
+        for i, opt in enumerate(options):
+            options_text += f"{chr(65+i)}. {opt}\n"
+        
+        text = f"Question: {question}\nOptions:\n{options_text}Rationale: {rationale}\nAnswer: {correct}"
+        problems.append({"text": text})
+    
+    print.info(f"Loaded {len(problems)} problems from AQuA")
+    return problems
+
+# Tokenization function for HuggingFace datasets
+def tokenize_function(examples, tokenizer):
+    return tokenizer(
+        examples["text"],
+        truncation=True,
+        padding="max_length",
+        max_length=512,
+        return_tensors="pt"
+    )
+
+# Function to prepare a dataset for training
+def prepare_dataset(data, tokenizer):
+    # Convert to HuggingFace dataset
+    hf_dataset = HFDataset.from_dict({"text": [item["text"] for item in data]})
+    
+    # Tokenize the dataset
+    tokenized_dataset = hf_dataset.map(
+        tokenize_function(tokenizer),
+        batched=True,
+        remove_columns=["text"]
+    )
+    
+    # Set the format for PyTorch
+    tokenized_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    
+    return tokenized_dataset
