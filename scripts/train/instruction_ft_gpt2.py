@@ -1,6 +1,6 @@
 """
 Instruction fine-tuning for a pre-trained GPT-2 math model using MathInstruct dataset.
-Allows filtering by source, limiting sample count, and random sampling.
+Allows filtering by source, limiting sample count, and uses streaming for efficiency.
 Integrates Weights & Biases (wandb) for tracking.
 """
 
@@ -8,8 +8,6 @@ import os
 import torch
 import wandb
 import sys
-import random
-from collections import Counter
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
@@ -18,6 +16,7 @@ from transformers import (
     DataCollatorForLanguageModeling
 )
 from datasets import load_dataset
+from collections import Counter
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
@@ -36,38 +35,35 @@ except ImportError:
             return torch.device("cpu")
 
 def main():
-    # Create wandb config to log parameters
+    # create wandb config to log parameter
     config = {
         "model_name": "gpt2-math-curr",  # Your pre-trained model
+        "output_model_name": "gpt2-math-curr-instruct",  # Name for the fine-tuned model
         "dataset": "TIGER-Lab/MathInstruct",
+        "streaming": True,
+        "shuffle_buffer": 5000,  # Buffer size for better mixing
         "max_length": 1024,
-        "max_steps": 10000,            # Adjust based on your needs
-        "learning_rate": 2e-5,         # Slightly lower for instruction tuning
-        "batch_size": 16,              # Adjusted for instruction tuning
-        "gradient_accumulation_steps": 2,
-        "num_workers": 4,
-        "max_samples": 10000,          # Maximum number of samples to use
-        "sources_to_include": [],      # Empty means include all (populated later)
-        "random_seed": 42              # For reproducibility
+        "max_steps": 50000,            
+        "learning_rate": 5e-5,         
+        "batch_size": 32,              
+        "gradient_accumulation_steps": 1,
+        "num_workers": 4,              
+        "prefetch_factor": 2,          
+        "max_samples": 50000,          # Maximum number of samples to use
+        "sources_to_exclude": [],      # Empty means exclude none (populated later)
     }
 
     # Set the output directories
-    output_dir = f"./models/{config['model_name']}-instruct"
+    output_dir = f"./models/{config['output_model_name']}"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
     # Initialize wandb
     run = wandb.init(
         project="math-instruct", 
-        name="gpt2-math-curr-instruct",
+        name=config['output_model_name'],
         config=config
     )
-
-    # Set random seed for reproducibility
-    random.seed(config["random_seed"])
-    torch.manual_seed(config["random_seed"])
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(config["random_seed"])
 
     # Check for available hardware
     device = get_device()
@@ -79,18 +75,35 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name)
     
-    # Set padding token if not already set
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = model.config.eos_token_id
+    # Set padding token directly
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = model.config.eos_token_id
     
-    # Load MathInstruct dataset
-    print("Loading MathInstruct dataset...")
-    dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
+    # Load MathInstruct dataset in streaming mode
+    print("Loading MathInstruct dataset in streaming mode...")
+    dataset = load_dataset("TIGER-Lab/MathInstruct", streaming=config["streaming"])
     
-    # Print distinct source values
-    source_counts = Counter(dataset["source"])
-    print("\nDistinct sources in the dataset:")
+    # For streaming mode, collect source information from a small sample
+    if config["streaming"]:
+        # Sample some examples to analyze sources
+        sample_size = 1000
+        source_sample = []
+        sample_iter = iter(dataset["train"])
+        for _ in range(sample_size):
+            try:
+                example = next(sample_iter)
+                source_sample.append(example["source"])
+            except StopIteration:
+                break
+        
+        source_counts = Counter(source_sample)
+        print(f"\nSources in sample of {len(source_sample)} examples:")
+    else:
+        # If not streaming, analyze the full dataset
+        source_counts = Counter(dataset["train"]["source"])
+        print("\nDistinct sources in the dataset:")
+    
+    # Print source distribution
     for source, count in source_counts.items():
         print(f"- {source}: {count} examples")
     
@@ -100,20 +113,22 @@ def main():
         data=[[source, count] for source, count in source_counts.items()]
     )})
     
-    # Filter dataset by source (if specified)
-    if config["sources_to_include"]:
-        print(f"Filtering to include only the following sources: {config['sources_to_include']}")
-        dataset = dataset.filter(lambda example: example["source"] in config["sources_to_include"])
-        print(f"Dataset filtered to {len(dataset)} examples")
-    else:
-        print("Using all sources (no filtering applied)")
+    # Apply source filtering if needed
+    train_dataset = dataset["train"]
     
-    # Randomly select a subset of samples if needed
-    if config["max_samples"] and config["max_samples"] < len(dataset):
-        print(f"Randomly selecting {config['max_samples']} examples from {len(dataset)} available examples")
-        selected_indices = random.sample(range(len(dataset)), config["max_samples"])
-        dataset = dataset.select(selected_indices)
-        print(f"Dataset sampled to {len(dataset)} examples")
+    if config["sources_to_exclude"]:
+        print(f"Filtering to exclude the following sources: {config['sources_to_exclude']}")
+        train_dataset = train_dataset.filter(lambda example: example["source"] not in config["sources_to_exclude"])
+    
+    # Shuffle the dataset using buffer
+    shuffle_buffer_size = config['shuffle_buffer']
+    print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
+    train_dataset = train_dataset.shuffle(buffer_size=shuffle_buffer_size)
+    
+    # Limit to max_samples if specified
+    if config["max_samples"]:
+        print(f"Taking first {config['max_samples']} examples after shuffling")
+        train_dataset = train_dataset.take(config["max_samples"])
     
     # Prepare the prompt template function
     def prepare_instruction_data(examples):
@@ -124,27 +139,25 @@ def main():
         
         for i in range(len(examples["instruction"])):
             instruction = examples["instruction"][i]
-            input_text = examples["input"][i] if examples["input"][i] else ""
             output = examples["output"][i]
             
-            # Format as a single text: instruction + input (if any) + output
-            if input_text:
-                formatted_text = f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output}"
-            else:
-                formatted_text = f"Instruction: {instruction}\nOutput: {output}"
-            
+            # Format with Instruction and Response prefixes
+            formatted_text = f"Instruction\n{instruction}\nResponse\n{output}"
             formatted_texts.append(formatted_text)
         
         return {"formatted_text": formatted_texts}
     
     # Apply the formatting
-    processed_dataset = dataset.map(
+    processed_dataset = train_dataset.map(
         prepare_instruction_data,
         batched=True,
-        remove_columns=dataset.column_names  # Remove original columns
+        remove_columns=["instruction", "output", "source"]
     )
     
-    print(f"Sample formatted instruction data:\n{processed_dataset[0]['formatted_text']}")
+    # Print a sample of the formatted data
+    sample_iter = iter(processed_dataset)
+    sample_example = next(sample_iter)
+    print(f"\nSample formatted instruction data:\n{sample_example['formatted_text']}")
     
     # Tokenize the formatted text
     def tokenize_function(examples):
@@ -222,16 +235,16 @@ def main():
     print(f"Model saved to {model_save_path}")
     
     # Log model to wandb
-    artifact = wandb.Artifact(f"{config['model_name']}-instruct", type="model")
+    artifact = wandb.Artifact(config['output_model_name'], type="model")
     artifact.add_dir(model_save_path)
     run.log_artifact(artifact)
     
     # Sample generation to test the model
     print("\nGenerating sample outputs...")
     test_prompts = [
-        "Instruction: Solve the equation 2x + 3 = 7\nOutput:",
-        "Instruction: Find the derivative of f(x) = x^2 * sin(x)\nOutput:",
-        "Instruction: Calculate the area of a circle with radius 5 cm\nOutput:"
+        "Instruction\nSolve the equation 2x + 3 = 7\nResponse\n",
+        "Instruction\nFind the derivative of f(x) = x^2 * sin(x)\nResponse\n",
+        "Instruction\nCalculate the area of a circle with radius 5 cm\nResponse\n"
     ]
     
     model = model.to(device)
