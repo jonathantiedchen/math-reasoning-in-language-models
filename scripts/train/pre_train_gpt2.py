@@ -16,7 +16,7 @@ from transformers import (
 )
 from datasets import load_dataset
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -25,16 +25,18 @@ from utils.helper import get_device
 def main():
 
     # create wandb config to log parameter
-    config={
+    config = {
             "model_name": "gpt2",  # Options: "gpt2", "gpt2-medium", etc.
             "dataset": "open-web-math",
             "streaming": True,
-            "shuffle_buffer": 1000,
+            "shuffle_buffer": 5000,  # Increased buffer size for better mixing
             "max_length": 1024,
-            "max_steps": 10000,
+            "max_steps": 50000,
             "learning_rate": 5e-5,
-            "batch_size": 8,
-            "gradient_accumulation_steps": 4
+            "batch_size": 32,  # Increased from 8 to better utilize H100
+            "gradient_accumulation_steps": 1,  # Reduced since we're using larger batches
+            "num_workers": 4,  # Parallel data loading
+            "prefetch_factor": 2  # Prefetch factor for data loading
     }
 
     # Set the output directories
@@ -44,8 +46,8 @@ def main():
     
     # Initialize wandb
     run = wandb.init(
-        project="gpt2-math-reasoning", 
-        name="gpt2-openwebmath-streaming",
+        project="gpt2-math", 
+        name="gpt2-openwebmath-pre_training",
         config=config
     )
 
@@ -70,8 +72,6 @@ def main():
     # Shuffle the dataset
     shuffle_buffer_size = config['shuffle_buffer']
     print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
-
-    # defining train dataset
     train_dataset = dataset["train"].shuffle(buffer_size=shuffle_buffer_size)
 
     # Define custom Tokenization function
@@ -88,7 +88,7 @@ def main():
     train_dataset = train_dataset.map(
         tokenize_function, # converts text into token IDs that the model can understand
         batched=True, # enables batch processing of examples
-        batch_size=16,  # Process 16 examples at a time
+        batch_size=64,  # Process 16 examples at a time
         remove_columns=["url", "date", "metadata", "text"] # after tokenization, the original columns are removed from the dataset
     )
     
@@ -98,24 +98,33 @@ def main():
         mlm=False  # GPT-2 uses causal language modeling, not masked
     )
     
-    # define training arguments
     training_args = TrainingArguments(
-        output_dir=output_dir, # directory where the model predictions and checkpoints will be writtendirectory where the model predictions and checkpoints will be written
-        overwrite_output_dir=True, # overwrite the content of the output directory
-        per_device_train_batch_size=8, # The batch size per GPU/CPU for training
-        gradient_accumulation_steps=4, # Gradients from multiple mini-batches (4 in this case) are accumulated before performing a parameter update
-        save_steps=1000, # Save a checkpoint every 1,000 training steps
-        save_total_limit=2, # Keep only the 2 most recent checkpoint files to save disk space
-        logging_steps=100, # Log training metrics every 100 steps
-        logging_dir="./logs", # Directory where training logs will be written
-        fp16=torch.cuda.is_available(),  # Use mixed precision training if a GPU is available
-        learning_rate=config["learning_rate"], # initial learning rate for the optimizer 
-        weight_decay=0.01, # L2 regularization strength to prevent overfitting
-        warmup_steps=500, # Gradually increase the learning rate from 0 to the specified learning rate over the first 500 steps -> stabilizes early training
-        # Streaming mode specific settings
-        max_steps=10000,  # Limit training to a fixed number of steps
-        evaluation_strategy="no",  # No evaluation during training for streaming
-        report_to="wandb",  # Log to Weights & Biases
+        output_dir=output_dir,                          # Directory where model checkpoints and logs will be saved
+        overwrite_output_dir=True,                      # If output_dir exists, overwrite instead of erroring
+        per_device_train_batch_size=config["batch_size"], # Number of samples processed per GPU during training
+        gradient_accumulation_steps=config["gradient_accumulation_steps"], # Number of forward passes before updating parameters (effectively increases batch size)
+        save_steps=1000,                                # Save a checkpoint every 1000 steps
+        save_total_limit=2,                             # Keep only the 2 most recent checkpoints to save disk space
+        logging_steps=10,                               # Log metrics every 10 steps for more detailed monitoring
+        logging_dir="./logs",                           # Directory for storing training logs
+        
+        # H100-specific optimizations
+        bf16=True,                                      # Use BF16 mixed precision - more efficient on H100 tensor cores than FP16
+        bf16_full_eval=True,                            # Use BF16 during evaluation as well for consistency
+        dataloader_num_workers=config["num_workers"],   # Number of CPU workers for data loading (parallel processing)
+        dataloader_pin_memory=True,                     # Pin memory in CPU to accelerate CPU to GPU transfer
+        learning_rate=config["learning_rate"],          # Initial learning rate for the optimizer
+        weight_decay=0.01,                              # L2 regularization factor to prevent overfitting
+        warmup_steps=200,                               # Gradually increase learning rate for first 200 steps for stability
+        max_steps=config["max_steps"],                  # Total number of training steps (overrides num_train_epochs)
+        evaluation_strategy="no",                       # Disable evaluation during training for streaming datasets
+        report_to="wandb",                              # Log metrics to Weights & Biases for visualization
+        
+        # Performance options
+        disable_tqdm=False,                             # Show progress bar for monitoring training progress
+        
+        # Advanced optimization (PyTorch 2.0+)
+        torch_compile=True,                             # Enable PyTorch compiler for just-in-time optimization
     )
 
     # Initialize trainer
@@ -125,6 +134,9 @@ def main():
         data_collator=data_collator,
         train_dataset=train_dataset,
     )
+    
+    # Enable cudnn benchmark for faster training
+    torch.backends.cudnn.benchmark = True
     
     # Start training
     print("Starting training with streaming dataset...")
@@ -167,6 +179,14 @@ def main():
     
     # Log the generated text to wandb
     wandb.log({"example_generation": wandb.Html(f"<p><strong>Prompt:</strong> {test_prompt}</p><p><strong>Generated:</strong> {generated_text}</p>")})
+
+     # Log training performance metrics
+    gpu_stats = torch.cuda.memory_stats()
+    wandb.log({
+        "gpu_allocated_memory_gb": torch.cuda.memory_allocated() / 1e9,
+        "gpu_reserved_memory_gb": torch.cuda.memory_reserved() / 1e9,
+        "gpu_max_allocated_memory_gb": gpu_stats.get("allocated_bytes.all.peak", 0) / 1e9,
+    })
     
     # Finish the wandb run
     wandb.finish()
