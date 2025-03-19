@@ -12,3 +12,4 @@ torch==2.6.0
 tf-keras
 transformers
 accelerate>=0.26.0
+trl

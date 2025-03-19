@@ -4,7 +4,7 @@ import json
 import logging
 from datasets import Dataset as HFDataset
 import xml.etree.ElementTree as ET
-
+import sys
 
 
 # Function to download GSM8K dataset from GitHub
@@ -51,6 +51,13 @@ def load_gsm8k_from_file():
     
     print(f"Loaded {len(train_data)} training examples and {len(test_data)} test examples")
     return train_data, test_data
+
+
+######## CURRICULUM LEARNING #############
+def prepare_datasets_qa(example):
+    # Simple Question-Answer format
+    example['prompt'] = f"###Question: {example['question']}\n###Answer: {example['answer']}"
+    return example
 
 # Data loading functions for each dataset format
 def load_asdiv_data(file_path):
@@ -167,31 +174,116 @@ def load_aqua_data(file_path):
     print(f"Loaded {len(problems)} problems from AQuA")
     return problems
 
-# Tokenization function for HuggingFace datasets
-def tokenize_function(tokenizer):
-    def tokenize(examples):
-        return tokenizer(
-            examples["text"],
-            truncation=True,
-            padding="max_length",
-            max_length=512,
-            return_tensors="pt"
-        )
-    return tokenize
 
-# Function to prepare a dataset for training
-def prepare_dataset(data, tokenizer):
-    # Convert to HuggingFace dataset
-    hf_dataset = HFDataset.from_dict({"text": [item["text"] for item in data]})
+def get_cl_learning_data():
+    # Add parent directory to path for importing modules
+    parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
     
-    # In prepare_dataset:
-    tokenized_dataset = hf_dataset.map(
-        tokenize_function(tokenizer),
-        batched=True,
-        remove_columns=["text"]
-    )
+    # Import data loading functions
+    from utils.data import load_asdiv_data, load_paramawps_data, load_svamp_data, load_aqua_data, load_dmath_data
     
-    # Set the format for PyTorch
-    tokenized_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    # Find data root directory
+    data_root = None
+    for root in [os.getcwd()] + [os.path.abspath(os.path.join(os.getcwd(), *['..'] * i)) for i in range(1, 4)]:
+        if os.path.exists(os.path.join(root, "data")):
+            data_root = root
+            break
     
-    return tokenized_dataset
+    if data_root is None:
+        raise FileNotFoundError("Could not find data directory")
+    
+    # Unified formatting function for most datasets
+    def format_with_solution(item, solution_key):
+        text = item['text']
+        parts = text.split('Question: ')[1].split(f'\n{solution_key}:')
+        question = parts[0].strip()
+        
+        solution_answer_parts = parts[1].split('\nAnswer:')
+        solution = solution_answer_parts[0].strip()
+        answer = solution_answer_parts[1].strip()
+        
+        return {
+            'question': question,
+            'answer': f"Let me solve this step by step.\n{solution}\nTherefore, the answer is {answer}."
+        }
+    
+    # Special formatter for AQuA
+    def format_aqua(item):
+        text = item['text']
+        
+        # Extract question and options
+        question_part = text.split('Question: ')[1].split('Rationale:')[0].strip()
+        if 'Options:' in question_part:
+            question_parts = question_part.split('Options:')
+            question = f"{question_parts[0].strip()}\nOptions:\n{question_parts[1].strip()}"
+        else:
+            question = question_part
+        
+        # Extract rationale and answer
+        rationale = text.split('Rationale:')[1].split('Answer:')[0].strip() if 'Rationale:' in text else ""
+        answer = text.split('Answer:')[1].strip() if 'Answer:' in text else ""
+        
+        return {
+            'question': question,
+            'answer': f"Let me solve this step by step.\n{rationale}\nTherefore, the answer is {answer}."
+        }
+    
+    # Define dataset configurations
+    datasets_config = [
+        {
+            "name": "ASDiv",
+            "path": os.path.join(data_root, "data", "curriculum_learning", "1_ASDiv", "ASDiv.xml"),
+            "loader": load_asdiv_data,
+            "format": lambda item: format_with_solution(item, 'Solution')
+        },
+        {
+            "name": "ParaMAWPS",
+            "path": os.path.join(data_root, "data", "curriculum_learning", "2_ParaMAWPS", "ParaMAWPS_trainset.json"),
+            "loader": load_paramawps_data,
+            "format": lambda item: format_with_solution(item, 'Equation')
+        },
+        {
+            "name": "SVAMP",
+            "path": os.path.join(data_root, "data", "curriculum_learning", "3_SVAMP", "SVAMP.json"),
+            "loader": load_svamp_data,
+            "format": lambda item: format_with_solution(item, 'Equation')
+        },
+        {
+            "name": "DMath",
+            "path": os.path.join(data_root, "data", "curriculum_learning", "4_Dmath", "dmath_train.json"),
+            "loader": load_dmath_data,
+            "format": lambda item: format_with_solution(item, 'Solution')
+        },
+        {
+            "name": "AQuA",
+            "path": os.path.join(data_root, "data", "curriculum_learning", "5_AQuA", "AQuA_train.json"),
+            "loader": load_aqua_data,
+            "format": format_aqua
+        }
+    ]
+    
+    # Process all datasets
+    standardized_datasets = {}
+    total_examples = 0
+    
+    for dataset_config in datasets_config:
+        try:
+            data = dataset_config["loader"](dataset_config["path"])
+            standardized_data = []
+            
+            for item in data:
+                try:
+                    formatted_item = dataset_config["format"](item)
+                    standardized_data.append(formatted_item)
+                except Exception:
+                    continue
+            
+            standardized_datasets[dataset_config["name"]] = standardized_data
+            total_examples += len(standardized_data)
+            
+        except Exception:
+            standardized_datasets[dataset_config["name"]] = []
+    
+    return standardized_datasets

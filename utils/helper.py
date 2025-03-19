@@ -1,6 +1,6 @@
 from datasets import load_dataset
 import numpy as np
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
 import torch
 import random
 import re
@@ -225,3 +225,28 @@ def extract_answer_gsm8k(text):
         return float(numbers[-1])
     
     return None
+
+
+class WandbModelLogger(TrainerCallback):
+    def __init__(self, output_dir, tokenizer, save_steps=10000, model_name_prefix="gpt2-math-model"):
+        self.save_steps = save_steps
+        self.output_dir = output_dir
+        self.tokenizer = tokenizer
+        self.model_name_prefix = model_name_prefix
+    
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % self.save_steps == 0 and state.global_step > 0:
+            # Get model from kwargs
+            model = kwargs.get('model')
+            
+            # Save the model temporarily
+            tmp_save_path = f"{self.output_dir}/step_{state.global_step}"
+            model.save_pretrained(tmp_save_path)
+            self.tokenizer.save_pretrained(tmp_save_path)
+            
+            # Log model to wandb
+            artifact = wandb.Artifact(f"{self.model_name_prefix}-step-{state.global_step}", type="model")
+            artifact.add_dir(tmp_save_path)
+            wandb.log_artifact(artifact)
+            
+            print(f"Logged model at step {state.global_step} to wandb")
