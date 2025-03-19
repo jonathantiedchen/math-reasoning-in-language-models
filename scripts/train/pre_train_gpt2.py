@@ -20,7 +20,8 @@ parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from utils.helper import get_device
+from utils.helper import get_device, WandbModelLogger, MemoryManagementCallback  # Import custom logger
+
 
 def main():
 
@@ -31,7 +32,7 @@ def main():
             "streaming": True,
             "shuffle_buffer": 5000,  # Increased buffer size for better mixing
             "max_length": 1024,
-            "max_steps": 50000,
+            "max_steps": 100000,
             "learning_rate": 5e-5,
             "batch_size": 32,  # Increased from 8 to better utilize H100
             "gradient_accumulation_steps": 1,  # Reduced since we're using larger batches
@@ -119,6 +120,8 @@ def main():
         max_steps=config["max_steps"],                  # Total number of training steps (overrides num_train_epochs)
         evaluation_strategy="no",                       # Disable evaluation during training for streaming datasets
         report_to="wandb",                              # Log metrics to Weights & Biases for visualization
+        lr_scheduler_type="cosine",                     # Options: linear, cosine, cosine_with_restarts, polynomial, constant, constant_with_warmup
+
         
         # Performance options
         disable_tqdm=False,                             # Show progress bar for monitoring training progress
@@ -126,13 +129,26 @@ def main():
         # Advanced optimization (PyTorch 2.0+)
         torch_compile=True,                             # Enable PyTorch compiler for just-in-time optimization
     )
+    
+    # save model every 10000 steps
+    wandb_logger = WandbModelLogger(
+            output_dir=output_dir,
+            tokenizer=tokenizer,
+            save_steps=10000,
+            model_name_prefix="gpt2-math-100000"
+    )
 
+    #clear cache every 1000 steps
+    memory_manager = MemoryManagementCallback(clear_cache_steps=100)
+
+    
     # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
+        callbacks=[wandb_logger]
     )
     
     # Enable cudnn benchmark for faster training

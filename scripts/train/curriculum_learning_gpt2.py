@@ -77,10 +77,13 @@ for dataset_name, dataset_samples in dataset_dict.items():
     print(f"Training on {dataset_name} dataset")
     
     # Take only 5 samples
-    dataset_small = dataset_samples[:5]
+    #dataset_small = dataset_samples[:5]
+    
+    # Cut AQuA Dataset to 15000 samples
+    dataset_samples = dataset_samples[:15000] if dataset_name == "AQuA" else dataset_samples
     
     # Convert to pandas and then to Dataset
-    df = pd.DataFrame(dataset_small)
+    df = pd.DataFrame(dataset_samples)
     dataset = Dataset.from_pandas(df)
     
     # Apply formatting

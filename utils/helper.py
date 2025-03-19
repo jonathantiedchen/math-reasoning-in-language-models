@@ -4,6 +4,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
 import torch
 import random
 import re
+import gc
 
 def get_device():
     DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -226,7 +227,7 @@ def extract_answer_gsm8k(text):
     
     return None
 
-
+### To store Model regularly
 class WandbModelLogger(TrainerCallback):
     def __init__(self, output_dir, tokenizer, save_steps=10000, model_name_prefix="gpt2-math-model"):
         self.save_steps = save_steps
@@ -250,3 +251,23 @@ class WandbModelLogger(TrainerCallback):
             wandb.log_artifact(artifact)
             
             print(f"Logged model at step {state.global_step} to wandb")
+
+# To regularly empty GPU cache
+class MemoryManagementCallback(TrainerCallback):
+    def __init__(self, clear_cache_steps=100):
+        self.clear_cache_steps = clear_cache_steps
+        
+    def on_step_end(self, args, state, control, **kwargs):
+        # Clear cache periodically
+        if state.global_step % self.clear_cache_steps == 0:
+            # Force garbage collection first
+            gc.collect()
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            print(f"Step {state.global_step}: Cleared CUDA cache")
+            
+    def on_save(self, args, state, control, **kwargs):
+        # Always clear cache when saving
+        gc.collect()
+        torch.cuda.empty_cache()
+        print(f"Checkpoint at step {state.global_step}: Cleared CUDA cache")
