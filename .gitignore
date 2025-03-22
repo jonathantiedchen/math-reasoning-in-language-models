@@ -176,6 +176,7 @@ cython_debug/
 data/data_local/*
 wandb/
 artifacts/*
+*/artifacts/*
 
 *.csv
 *.model.keras
