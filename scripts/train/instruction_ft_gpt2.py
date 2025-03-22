@@ -52,11 +52,11 @@ def main():
         "dataset": "TIGER-Lab/MathInstruct",
         "streaming": True,
         "shuffle_buffer": 10000,  # Buffer size for better mixing
-        "max_length": 1024,
+        "max_length": 512,
         "max_steps": 50000,            
-        "learning_rate": 5e-5,         
-        "batch_size": 32,              
-        "gradient_accumulation_steps": 1,
+        "learning_rate": 2e-5,         
+        "batch_size": 8,              
+        "gradient_accumulation_steps": 8,
         "num_workers": 4,              
         "prefetch_factor": 2,          
         "max_samples": 50000,          # Maximum number of samples to use
@@ -65,7 +65,7 @@ def main():
     }
 
     # Set the output directories
-    output_dir = f"./models/{config['output_model_name']}"
+    output_dir = "./models/mathgpt2sft/"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
