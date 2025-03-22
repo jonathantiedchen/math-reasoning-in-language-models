@@ -53,13 +53,13 @@ def main():
         "streaming": True,
         "shuffle_buffer": 10000,  # Buffer size for better mixing
         "max_length": 512,
-        "max_steps": 50000,            
+        "max_steps": 25,            
         "learning_rate": 2e-5,         
         "batch_size": 8,              
         "gradient_accumulation_steps": 8,
         "num_workers": 4,              
         "prefetch_factor": 2,          
-        "max_samples": 50000,          # Maximum number of samples to use
+        "max_samples": 10,          # Maximum number of samples to use
         "sources_to_exclude": ["data/PoT/"],      # Use just the prefix to exclude all PoT sources
         "wandb_artifact_path": "master_thesis_math_lm/gpt2-math/gpt2-math-model:v0",  # Path to the artifact
     }
