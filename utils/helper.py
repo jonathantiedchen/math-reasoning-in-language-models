@@ -5,6 +5,8 @@ import torch
 import random
 import re
 import gc
+import time
+import wandb
 
 def get_device():
     DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -271,3 +273,28 @@ class MemoryManagementCallback(TrainerCallback):
         gc.collect()
         torch.cuda.empty_cache()
         print(f"Checkpoint at step {state.global_step}: Cleared CUDA cache")
+
+class TrainingSpeedCallback:
+    """Callback to track training speed (samples/second)"""
+    def __init__(self):
+        self.start_time = None
+        self.step_count = 0
+        self.total_samples = 0
+        
+    def on_step_begin(self, args, state, control, **kwargs):
+        if self.start_time is None:
+            self.start_time = time.time()
+        
+    def on_step_end(self, args, state, control, **kwargs):
+        self.step_count += 1
+        self.total_samples += args.per_device_train_batch_size * args.gradient_accumulation_steps
+        
+        if self.step_count % 10 == 0:  # Log every 10 steps
+            elapsed = time.time() - self.start_time
+            samples_per_second = self.total_samples / elapsed
+            wandb.log({
+                "training_step": self.step_count,
+                "samples_per_second": samples_per_second,
+                "seconds_per_step": elapsed / self.step_count
+            })
+            print(f"Step {self.step_count}: {samples_per_second:.2f} samples/second")
