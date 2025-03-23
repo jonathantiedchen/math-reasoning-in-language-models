@@ -32,12 +32,12 @@ def main():
             "streaming": True,
             "shuffle_buffer": 5000,  # Increased buffer size for better mixing
             "max_length": 1024,
-            "max_steps": 100000,
+            "max_steps": 50000,
             "learning_rate": 5e-5,
-            "batch_size": 32,  # Increased from 8 to better utilize H100
-            "gradient_accumulation_steps": 1,  # Reduced since we're using larger batches
+            "batch_size": 64,  # Increased from 8 to better utilize H100
+            "gradient_accumulation_steps": 2,  
             "num_workers": 4,  # Parallel data loading
-            "prefetch_factor": 2  # Prefetch factor for data loading
+            "prefetch_factor": 4  # Prefetch factor for data loading
     }
 
     # Set the output directories
