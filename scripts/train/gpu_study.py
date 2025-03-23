@@ -7,6 +7,7 @@ import os
 import time
 import torch
 import wandb
+import pynvml
 import sys
 from transformers import (
     AutoModelForCausalLM, 
@@ -18,7 +19,7 @@ from transformers import (
 from datasets import load_dataset
 
 # Import configurations
-from gpu_study_configs import config_1, config_2, config_3, config_4, config_5, config_6, config_7, config_8
+from gpu_study_configs import config_1, config_2, config_3, config_4, config_5, config_6, config_7, config_8, config_9, config_10
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
@@ -49,7 +50,7 @@ def run_experiment(config, experiment_name):
     
     # Initialize wandb
     run = wandb.init(
-        project="gpt2-openwebmath-optimization", 
+        project="gpt2-gpu-study", 
         name=f"experiment-{experiment_name}",
         config=config,
         reinit=True  # Allow reinitializing for multiple experiments
@@ -145,7 +146,7 @@ def run_experiment(config, experiment_name):
         model_name_prefix=f"gpt2-math-{experiment_name}"
     )
     
-    memory_manager = MemoryManagementCallback(clear_cache_steps=100)
+    #memory_manager = MemoryManagementCallback(clear_cache_steps=100)
     training_speed_tracker = TrainingSpeedCallback()
     
     # Initialize trainer
@@ -154,7 +155,7 @@ def run_experiment(config, experiment_name):
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        callbacks=[wandb_logger, memory_manager, training_speed_tracker]
+        callbacks=[wandb_logger, training_speed_tracker]
     )
     
     # Enable cudnn benchmark for faster training
@@ -194,7 +195,9 @@ def main():
         (config_5, "bf16"),
         (config_6, "adafactor_optimizer"),
         (config_7, "pin_memory"),
-        (config_8, "multi_workers")
+        (config_8, "multi_workers"),
+        (config_9, "increased_batch_size"),
+        (config_10, "pre-fetching")
     ]
     
     # Run each experiment

@@ -274,27 +274,30 @@ class MemoryManagementCallback(TrainerCallback):
         torch.cuda.empty_cache()
         print(f"Checkpoint at step {state.global_step}: Cleared CUDA cache")
 
-class TrainingSpeedCallback:
-    """Callback to track training speed (samples/second)"""
+class TrainingSpeedCallback(TrainerCallback):
+    """Callback to track training speed metrics."""
+    
     def __init__(self):
-        self.start_time = None
-        self.step_count = 0
-        self.total_samples = 0
-        
-    def on_step_begin(self, args, state, control, **kwargs):
-        if self.start_time is None:
-            self.start_time = time.time()
-        
+        self.step_times = []
+        self.last_step_time = time.time()
+    
+    def on_init_end(self, args, state, control, **kwargs):
+        """Method called at the end of trainer initialization."""
+        # Initialize timing variables
+        self.last_step_time = time.time()
+        return control
+    
     def on_step_end(self, args, state, control, **kwargs):
-        self.step_count += 1
-        self.total_samples += args.per_device_train_batch_size * args.gradient_accumulation_steps
+        current_time = time.time()
+        step_time = current_time - self.last_step_time
+        self.step_times.append(step_time)
+        self.last_step_time = current_time
         
-        if self.step_count % 10 == 0:  # Log every 10 steps
-            elapsed = time.time() - self.start_time
-            samples_per_second = self.total_samples / elapsed
-            wandb.log({
-                "training_step": self.step_count,
-                "samples_per_second": samples_per_second,
-                "seconds_per_step": elapsed / self.step_count
-            })
-            print(f"Step {self.step_count}: {samples_per_second:.2f} samples/second")
+        # Log the step time
+        wandb.log({
+            "step_time_seconds": step_time,
+            "steps_per_second": 1 / step_time if step_time > 0 else 0,
+            "running_avg_steps_per_second": len(self.step_times) / sum(self.step_times) if self.step_times else 0
+        })
+        
+        return control
