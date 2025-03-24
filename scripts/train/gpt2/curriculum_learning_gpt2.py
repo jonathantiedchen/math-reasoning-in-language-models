@@ -14,7 +14,6 @@ if parent_dir not in sys.path:
 from utils.helper import get_device, WandbModelLogger
 from utils.data import get_cl_learning_data, prepare_datasets_qa
     
-
 # Define wandb configuration
 wandb_config = {
     "model_name": "gpt2",
@@ -33,34 +32,24 @@ wandb_config = {
     "test_size": 0.1
 }
 
-run = wandb.init(
-    project="gpt2-math-test", 
-    name="curriculum-learning-sft",
-    config=wandb_config
-)
-artifact = run.use_artifact('master_thesis_math_lm/gpt2-math/gpt2-math-model:v0', type='model')
+# Download the model only once before starting the dataset loops
+api = wandb.Api()
+artifact = api.artifact('master_thesis_math_lm/gpt2-math/gpt2-math-model:v1', type='model')
 artifact_dir = artifact.download()
 
-# Load the tokenizer and model
+# Load the tokenizer and model outside the loop
 tokenizer = AutoTokenizer.from_pretrained(artifact_dir)
-model = AutoModelForCausalLM.from_pretrained(artifact_dir)
+original_model = AutoModelForCausalLM.from_pretrained(artifact_dir)
 
 tokenizer.pad_token = tokenizer.eos_token
-model.config.pad_token_id = model.config.eos_token_id
+original_model.config.pad_token_id = original_model.config.eos_token_id
 
-# replace with get device
+# Get device
 device = get_device()
-device
+print(f"Using device: {device}")
 
+# Load all datasets
 dataset_dict = get_cl_learning_data()
-
-# Now you have access to each dataset separately:
-asdiv_data = dataset_dict["ASDiv"]
-paramawps_data = dataset_dict["ParaMAWPS"]
-svamp_data = dataset_dict["SVAMP"]
-dmath_data = dataset_dict["DMath"]
-aqua_data = dataset_dict["AQuA"]
-
 
 def tokenize_datasets(dataset):
     tokenized_dataset = dataset.map(
@@ -73,11 +62,25 @@ def tokenize_datasets(dataset):
       remove_columns=['prompt'])
     return tokenized_dataset
 
+# Create output directory
+os.makedirs("./models/mathgpt2sft/", exist_ok=True)
+
 for dataset_name, dataset_samples in dataset_dict.items():
+    # Initialize a new wandb run for each dataset
+    run = wandb.init(
+        project="gpt2-math-test", 
+        name=f"curriculum-learning-sft-{dataset_name}",
+        config=wandb_config,
+        reinit=True  # This ensures a new run is created each time
+    )
+    
     print(f"Training on {dataset_name} dataset")
     
-    # Take only 5 samples
-    #dataset_small = dataset_samples[:5]
+    # Create a fresh copy of the model for each dataset to ensure curriculum learning works properly
+    # This avoids carrying over adaptations from previous datasets
+    model = AutoModelForCausalLM.from_pretrained(artifact_dir)
+    model.config.pad_token_id = model.config.eos_token_id
+    model.to(device)
     
     # Cut AQuA Dataset to 15000 samples
     dataset_samples = dataset_samples[:15000] if dataset_name == "AQuA" else dataset_samples
@@ -99,6 +102,13 @@ for dataset_name, dataset_samples in dataset_dict.items():
     train_dataset = split_dataset["train"]
     test_dataset = split_dataset["test"]
     
+    # Log dataset size information
+    wandb.log({
+        "dataset_name": dataset_name,
+        "train_size": len(train_dataset),
+        "eval_size": len(test_dataset),
+    })
+    
     # Manually tokenize both train and eval datasets
     tokenized_train = tokenize_datasets(train_dataset)
     tokenized_eval = tokenize_datasets(test_dataset)
@@ -109,12 +119,16 @@ for dataset_name, dataset_samples in dataset_dict.items():
     batch_size = wandb_config["batch_size"]
     max_steps = wandb_config["max_steps"]
     
-    # Create wandb callback
+    # Create dataset-specific output directory
+    dataset_output_dir = f"./models/mathgpt2sft/{dataset_name}"
+    os.makedirs(dataset_output_dir, exist_ok=True)
+    
+    # Create wandb callback with dataset-specific output directory
     wandb_callback = WandbModelLogger(
-        output_dir="./models/mathgpt2sft/",
+        output_dir=dataset_output_dir,
         tokenizer=tokenizer,
         save_steps=200,
-        model_name_prefix="gpt2-math-sft"
+        model_name_prefix=f"gpt2-math-sft-{dataset_name}"
     )
     
     trainer = SFTTrainer(
@@ -122,9 +136,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
         train_dataset=tokenized_train,  
         eval_dataset=tokenized_eval,
         args=SFTConfig(
-            output_dir="./models/mathgpt2sft/",
+            output_dir=dataset_output_dir,
             gradient_accumulation_steps=wandb_config["gradient_accumulation_steps"],
-            #evaluation_strategy="steps",
             do_eval=True,
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=batch_size,
@@ -139,25 +152,30 @@ for dataset_name, dataset_samples in dataset_dict.items():
             eval_steps=wandb_config["eval_steps"],
             max_steps=max_steps,
             warmup_steps=wandb_config["warmup_steps"],
-            #dataset_text_field="prompt", #performs automatic tokenization in training when specified
             lr_scheduler_type=wandb_config["lr_scheduler"],
             report_to="wandb"
         ),
-        data_collator=data_collator
+        data_collator=data_collator,
+        callbacks=[wandb_callback]
     )
     
+    # Start training on this dataset
     trainer.train()
 
-    model_name = "final" if dataset_name == "AQuA" else dataset_name
-    
-    # Save final model
-    final_model_path = f"./models/mathgpt2sft/model_{model_name}"
+    # Save final model for this dataset
+    final_model_path = f"{dataset_output_dir}/final"
     trainer.save_model(final_model_path)
     
-    # Log final model to wandb
-    final_artifact = wandb.Artifact(f"gpt2-math-sft-{model_name}", type="model")
+    # Log model to wandb
+    final_artifact = wandb.Artifact(f"gpt2-math-sft-{dataset_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
+    
+    # Clean up GPU memory
+    del model
+    torch.cuda.empty_cache()
+    
+    # Finish this wandb run before starting the next one
+    wandb.finish()
 
-# Finish wandb run
-wandb.finish()
+print("Curriculum learning completed for all datasets.")

@@ -19,7 +19,7 @@ from transformers import (
 from datasets import load_dataset
 
 # Import configurations
-from gpu_study_configs import config_1, config_2, config_3, config_4, config_5, config_6, config_7, config_8, config_9, config_10
+from scripts.train.gpu_experiment.gpu_study_configs import config_1, config_2, config_3, config_4, config_5, config_6, config_7, config_8, config_9, config_10
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
