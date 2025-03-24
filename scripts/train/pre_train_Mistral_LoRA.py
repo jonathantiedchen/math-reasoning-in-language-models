@@ -18,10 +18,9 @@ from datasets import load_dataset
 from peft import (
     LoraConfig,
     get_peft_model,
-    prepare_model_for_kbit_training,
     TaskType
 )
-import bitsandbytes as bnb
+# Removed: import bitsandbytes as bnb
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
@@ -55,7 +54,7 @@ def main():
             "lora_r": 16,             # LoRA attention dimension
             "lora_alpha": 32,         # LoRA alpha parameter
             "lora_dropout": 0.05,     # Dropout probability for LoRA layers
-            "load_in_8bit": True,     # Use 8-bit quantization to reduce memory requirements
+            # Removed: "load_in_8bit": True,     # Use 8-bit quantization to reduce memory requirements
             "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             # Testing parameters
             "testing_mode": args.test,                 # Set from command line args
@@ -85,11 +84,11 @@ def main():
     print(f"Loading pre-trained model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
-    # Load in 8-bit precision to save GPU memory
-    print(f"Loading model in 8-bit precision...")
+    # Load model in full precision
+    print(f"Loading model in full precision...")
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        load_in_8bit=config['load_in_8bit'],
+        # Removed: load_in_8bit=config['load_in_8bit'],
         device_map="auto",
         torch_dtype=torch.float16
     )
@@ -99,9 +98,8 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = model.config.eos_token_id
     
-    # Prepare model for LoRA training
-    print("Preparing model for LoRA fine-tuning...")
-    model = prepare_model_for_kbit_training(model)
+    # Removed: Prepare model for LoRA training
+    # Removed: model = prepare_model_for_kbit_training(model)
     
     # Define LoRA configuration
     lora_config = LoraConfig(
@@ -170,7 +168,7 @@ def main():
         logging_steps=10,
         logging_dir="./logs",
         
-        # Mixed precision settings - using FP16 as BF16 is handled by 8-bit quantization
+        # Mixed precision settings - using FP16
         fp16=True,
         dataloader_num_workers=config["num_workers"],
         dataloader_pin_memory=True,
