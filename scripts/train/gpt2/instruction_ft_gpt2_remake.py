@@ -15,17 +15,18 @@ from transformers.integrations import WandbCallback
 
 # Initialize Weights & Biases with more configuration options
 wandb.init(
+    entity="master_thesis_math_lm",
     project="gpt2-math-instruct",
     name="first-remake-instruction-learning",
     config={
         "model_name": "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 16,  # Reduced batch size
+        "batch_size": 64,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
         "learning_rate": 5e-5,
         "epochs": 1,
-        "max_steps": 10,
-        "sequence_length": 1024
+        "max_steps": 5000,
+        "sequence_length": 2048
     }
 )
 
@@ -46,6 +47,14 @@ if tokenizer.pad_token is None:
 # Load the TIGER-Lab/MathInstruct dataset - just the train split
 dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
 print(f"Dataset loaded: {len(dataset)} examples")
+
+# Filter out examples where source starts with "data/PoT/"
+def filter_pot_sources(example):
+    return not example["source"].startswith("data/PoT/")
+
+# Apply the filter to the dataset
+filtered_dataset = dataset.filter(filter_pot_sources)
+print(f"Filtered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} PoT examples)")
 
 # Function to tokenize and prepare the dataset
 def tokenize_function(examples):
@@ -70,18 +79,14 @@ def tokenize_function(examples):
     
     return tokenized_inputs
 
-# For the initial assessment, we'll take a small subset of the dataset
-sample_size = 16 * 4 * 10  # Enough for 10 steps with batch size 16 and grad accumulation 4
 
-# Select a subset of the data for faster assessment
-subset = dataset.select(range(min(len(dataset), sample_size)))
 
 # Tokenize the subset
-tokenized_dataset = subset.map(
+tokenized_dataset = dataset.map(
     tokenize_function,
     batched=True,
     batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
-    remove_columns=dataset.column_names,
+    remove_columns=filtered_dataset.column_names,
     desc="Tokenizing training dataset"
 )
 
@@ -99,14 +104,14 @@ data_collator = DataCollatorForLanguageModeling(
 # Set up training arguments with memory optimizations
 batch_size = 16  # Reduced batch size
 training_args = TrainingArguments(
-    output_dir="./models/mathgpt2instruct/",
+    output_dir="./models/mathgpt2instruct",
     overwrite_output_dir=True,
     num_train_epochs=1,
     per_device_train_batch_size=batch_size,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=5,
     save_total_limit=2,
-    max_steps=10,
+    max_steps=1000,
     logging_steps=1,
     learning_rate=5e-5,
     weight_decay=0.01,
@@ -135,7 +140,7 @@ trainer.train()
 print("Training completed!")
 
 # Save the fine-tuned model
-model_save_path = "./gpt2-math-instruct"
+model_save_path = "./models/gpt2-math-instruct"
 trainer.save_model(model_save_path)
 tokenizer.save_pretrained(model_save_path)
 print(f"Model saved to {model_save_path}")
@@ -147,8 +152,10 @@ artifact = wandb.Artifact(
 )
 artifact.add_dir(model_save_path)
 wandb.log_artifact(artifact)
+#run.log_artifact(artifact)
 
 # Finish the W&B run
 wandb.finish()
 
 print("Fine-tuning process completed successfully!")
+
