@@ -12,6 +12,7 @@ from transformers import (
     integrations
 )
 from transformers.integrations import WandbCallback
+from collections import Counter
 
 # Initialize Weights & Biases with more configuration options
 wandb.init(
@@ -48,13 +49,33 @@ if tokenizer.pad_token is None:
 dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
 print(f"Dataset loaded: {len(dataset)} examples")
 
+# Print the source distribution before filtering
+source_counts = Counter(dataset["source"])
+print("\nSource distribution before filtering:")
+for source, count in sorted(source_counts.items(), key=lambda x: x[1], reverse=True):
+    print(f"{source}: {count} examples")
+
+# Print count of examples that will be filtered out
+pot_examples = [example for example in dataset["source"] if example.startswith("data/PoT/")]
+print(f"\nNumber of examples with source starting with 'data/PoT/': {len(pot_examples)}")
+
 # Filter out examples where source starts with "data/PoT/"
 def filter_pot_sources(example):
     return not example["source"].startswith("data/PoT/")
 
 # Apply the filter to the dataset
 filtered_dataset = dataset.filter(filter_pot_sources)
-print(f"Filtered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} PoT examples)")
+print(f"\nFiltered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} PoT examples)")
+
+# Print the source distribution after filtering
+filtered_source_counts = Counter(filtered_dataset["source"])
+print("\nSource distribution after filtering:")
+for source, count in sorted(filtered_source_counts.items(), key=lambda x: x[1], reverse=True):
+    print(f"{source}: {count} examples")
+
+# Log source distribution to W&B
+wandb.log({"source_distribution_before": source_counts})
+wandb.log({"source_distribution_after": filtered_source_counts})
 
 # Function to tokenize and prepare the dataset
 def tokenize_function(examples):
@@ -70,7 +91,7 @@ def tokenize_function(examples):
         texts,
         padding="max_length",
         truncation=True,
-        max_length=512,  # Reduced from 1024 to save memory
+        max_length=1024,  # Reduced from 1024 to save memory
         return_tensors="pt"
     )
     
@@ -79,10 +100,8 @@ def tokenize_function(examples):
     
     return tokenized_inputs
 
-
-
-# Tokenize the subset
-tokenized_dataset = dataset.map(
+# Tokenize the FILTERED dataset - this is the important fix
+tokenized_dataset = filtered_dataset.map(
     tokenize_function,
     batched=True,
     batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
@@ -90,7 +109,7 @@ tokenized_dataset = dataset.map(
     desc="Tokenizing training dataset"
 )
 
-print(f"Prepared training dataset: {len(tokenized_dataset)} examples")
+print(f"\nPrepared training dataset: {len(tokenized_dataset)} examples")
 
 # Free up some memory
 torch.cuda.empty_cache()
@@ -106,14 +125,14 @@ training_args = TrainingArguments(
     output_dir="./models/mathgpt2instruct",
     overwrite_output_dir=True,
     num_train_epochs=1,
-    num_workers=4,
-    prefetch_factor=2,
-    per_device_train_batch_size=32,
+    dataloader_num_workers=8,
+    # prefetch_factor=2,
+    per_device_train_batch_size=16,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=5,
     save_total_limit=2,
-    max_steps=1000,
-    logging_steps=50,
+    max_steps=50000,
+    logging_steps=100,
     learning_rate=5e-5,
     weight_decay=0.01,
     warmup_steps=100,
@@ -123,7 +142,6 @@ training_args = TrainingArguments(
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
     dataloader_pin_memory=False,  # Reduce CPU->GPU transfer overhead
     gradient_checkpointing=True,  # Trade compute for memory
-
 )
 
 # Initialize the Trainer with W&B callback for enhanced logging
@@ -160,4 +178,3 @@ wandb.log_artifact(artifact)
 wandb.finish()
 
 print("Fine-tuning process completed successfully!")
-
