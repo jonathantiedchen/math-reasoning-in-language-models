@@ -21,7 +21,7 @@ wandb_config = {
     "batch_size": 8,
     "max_steps": 5,
     "warmup_steps": 100,
-    "save_steps": 100,
+    "save_steps": 1000,
     "eval_steps": 100,
     "fp16": True,
     "gradient_accumulation_steps": 8,
@@ -123,13 +123,6 @@ for dataset_name, dataset_samples in dataset_dict.items():
     dataset_output_dir = f"./models/mathgpt2sft/{dataset_name}"
     os.makedirs(dataset_output_dir, exist_ok=True)
     
-    # Create wandb callback with dataset-specific output directory
-    wandb_callback = WandbModelLogger(
-        output_dir=dataset_output_dir,
-        tokenizer=tokenizer,
-        save_steps=200,
-        model_name_prefix=f"gpt2-math-sft-{dataset_name}"
-    )
     
     trainer = SFTTrainer(
         model=model,
@@ -155,8 +148,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
             lr_scheduler_type=wandb_config["lr_scheduler"],
             report_to="wandb"
         ),
-        data_collator=data_collator,
-        callbacks=[wandb_callback]
+        data_collator=data_collator
     )
     
     # Start training on this dataset
