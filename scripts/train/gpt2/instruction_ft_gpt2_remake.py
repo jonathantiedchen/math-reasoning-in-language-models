@@ -21,12 +21,12 @@ wandb.init(
     config={
         "model_name": "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 64,  # Reduced batch size
+        "batch_size": 32,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
         "learning_rate": 5e-5,
         "epochs": 1,
-        "max_steps": 5000,
-        "sequence_length": 2048
+        "max_steps": 1000,
+        "num_workers": 4,
     }
 )
 
@@ -102,26 +102,28 @@ data_collator = DataCollatorForLanguageModeling(
 )
 
 # Set up training arguments with memory optimizations
-batch_size = 16  # Reduced batch size
 training_args = TrainingArguments(
     output_dir="./models/mathgpt2instruct",
     overwrite_output_dir=True,
     num_train_epochs=1,
-    per_device_train_batch_size=batch_size,
+    num_workers=4,
+    prefetch_factor=2,
+    per_device_train_batch_size=32,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=5,
     save_total_limit=2,
     max_steps=1000,
-    logging_steps=1,
+    logging_steps=50,
     learning_rate=5e-5,
     weight_decay=0.01,
-    warmup_steps=0,
+    warmup_steps=100,
     report_to="wandb",
     fp16=True,  # Keep mixed precision
     # Memory optimizations
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
     dataloader_pin_memory=False,  # Reduce CPU->GPU transfer overhead
     gradient_checkpointing=True,  # Trade compute for memory
+
 )
 
 # Initialize the Trainer with W&B callback for enhanced logging
