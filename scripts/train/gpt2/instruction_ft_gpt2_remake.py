@@ -126,7 +126,6 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
-    prefetch_factor=2,
     per_device_train_batch_size=32,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=1000,
@@ -138,7 +137,6 @@ training_args = TrainingArguments(
     warmup_steps=100,
     report_to="wandb",
     fp16=True,  # Keep mixed precision
-    # Memory optimizations
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
     dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
     gradient_checkpointing=True,  # Trade compute for memory
