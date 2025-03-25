@@ -20,7 +20,7 @@ wandb.init(
     project="gpt2-math-instruct",
     name="first-remake-instruction-learning",
     config={
-        "model_name": "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v0",
+        "model_name": "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v1",
         "dataset": "TIGER-Lab/MathInstruct",
         "batch_size": 32,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
@@ -32,7 +32,7 @@ wandb.init(
 )
 
 # Load pre-trained model and tokenizer from Weights & Biases
-model_name = "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v0"
+model_name = "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v1"
 # First, download the model from W&B
 wandb_artifact = wandb.use_artifact(model_name)
 model_dir = wandb_artifact.download()
@@ -126,12 +126,12 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
-    # prefetch_factor=2,
-    per_device_train_batch_size=16,
+    prefetch_factor=2,
+    per_device_train_batch_size=32,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
-    save_steps=5,
+    save_steps=1000,
     save_total_limit=2,
-    max_steps=50000,
+    max_steps=25000,
     logging_steps=100,
     learning_rate=5e-5,
     weight_decay=0.01,
@@ -140,8 +140,9 @@ training_args = TrainingArguments(
     fp16=True,  # Keep mixed precision
     # Memory optimizations
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
-    dataloader_pin_memory=False,  # Reduce CPU->GPU transfer overhead
+    dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
     gradient_checkpointing=True,  # Trade compute for memory
+    group_by_length=True,  # Reduce padding by grouping similar lengths
 )
 
 # Initialize the Trainer with W&B callback for enhanced logging
