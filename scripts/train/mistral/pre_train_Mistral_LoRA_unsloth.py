@@ -1,5 +1,5 @@
 """
-Train Mistral 7B on OpenWebMath dataset using LoRA and streaming to avoid downloading the full dataset.
+Train Mistral 7B on OpenWebMath dataset using LoRA.
 Integrates Weights & Biases (wandb) for tracking.
 Uses Unsloth.ai for faster and more efficient training.
 Explicitly adds EOS tokens to ensure proper sequence termination.
@@ -11,16 +11,15 @@ import wandb
 import sys
 from transformers import (
     AutoTokenizer, 
-    TrainingArguments, 
-    DataCollatorForLanguageModeling
+    TrainingArguments
 )
 from datasets import load_dataset
-# Import Unsloth
-from unsloth import FastLanguageModel
+# Import Unsloth and the UnslothTrainer
+from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments, is_bfloat16_supported
 # Keep PEFT for LoRA config
 from peft import TaskType
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -39,8 +38,7 @@ def main():
     config = {
             "model_name": "mistralai/Mistral-7B-v0.1",
             "dataset": "open-web-math",
-            "streaming": True,
-            "shuffle_buffer": 5000,  # Shuffle buffer size for better mixing
+            "streaming": False,  # Changed to non-streaming
             "max_length": 1024,
             "max_steps": 50000,
             "learning_rate": 2e-4,    # Unsloth can handle slightly higher learning rates
@@ -110,96 +108,107 @@ def main():
             "q_proj", "k_proj", "v_proj", "o_proj", 
             "gate_proj", "up_proj", "down_proj"
         ],
-        bias="none",
-        task_type=TaskType.CAUSAL_LM
+        bias="none"
     )
     
     # Print trainable parameters info
     model.print_trainable_parameters()
     
-    # Load dataset in streaming mode
-    print("Loading OpenWebMath dataset in streaming mode...")
-    dataset = load_dataset("open-web-math/open-web-math", streaming=True)
+    # Load dataset in non-streaming mode
+    print("Loading OpenWebMath dataset in non-streaming mode...")
     
-    # Shuffle the dataset
-    shuffle_buffer_size = config['shuffle_buffer']
-    print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
-    train_dataset = dataset["train"].shuffle(buffer_size=shuffle_buffer_size)
-    
-    # Limit dataset size for testing if testing_mode is enabled
+    # If in testing mode, only load a small subset
     if config.get('testing_mode', False):
-        print(f"TESTING MODE: Limiting dataset to {config['test_sample_size']} examples")
-        train_dataset = train_dataset.take(config['test_sample_size'])
+        print(f"TESTING MODE: Loading only {config['test_sample_size']} examples")
+        dataset = load_dataset(
+            "open-web-math/open-web-math", 
+            streaming=False,
+            split=f"train[:{config['test_sample_size']}]"  # Load just a slice of the dataset
+        )
+    else:
+        # Load the full dataset
+        dataset = load_dataset(
+            "open-web-math/open-web-math", 
+            streaming=False,
+            split="train"
+        )
+    
+    # Shuffle the dataset (non-streaming version)
+    train_dataset = dataset.shuffle(seed=42)
 
     # Define prompt formatting function that explicitly adds EOS token
     def format_prompt(example):
-        # Explicitly add EOS token to the end of each example to ensure proper sequence termination
-        return {
-            "text": example["text"] + EOS_TOKEN,
-        }
+        # When batched=True, example["text"] is a list of texts
+        if isinstance(example["text"], list):
+            # Process a batch of examples
+            return {
+                "text": [text + EOS_TOKEN for text in example["text"]]
+            }
+        else:
+            # Process a single example
+            return {
+                "text": example["text"] + EOS_TOKEN
+            }
 
     # Map formatting to dataset
     train_dataset = train_dataset.map(
         format_prompt,
         remove_columns=["url", "date", "metadata"]
-    )
-
-    # Create data collator for language modeling
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False  # We're doing causal language modeling, not masked
+        # Removed batched=True to avoid the list concatenation error
     )
     
     # For testing: set a much smaller number of steps
     max_steps = 100 if config.get('testing_mode', False) else config["max_steps"]
     
-    # Unsloth recommends slightly different training args
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        overwrite_output_dir=True,
-        per_device_train_batch_size=config["batch_size"],
-        gradient_accumulation_steps=config["gradient_accumulation_steps"],
-        save_steps=1000,
-        save_total_limit=2,
-        logging_steps=10,
-        logging_dir="./logs",
-        
-        # Mixed precision settings
-        bf16=True,  # Using bfloat16 instead of fp16 with Unsloth
-        dataloader_num_workers=config["num_workers"],
-        dataloader_pin_memory=True,
-        learning_rate=config["learning_rate"],
-        weight_decay=0.01,
-        warmup_steps=50 if config.get('testing_mode', False) else 500,
-        max_steps=max_steps,
-        evaluation_strategy="no",
-        report_to="wandb",
-        lr_scheduler_type="cosine",
-        
-        # Performance options
-        disable_tqdm=False,
-        
-        # Gradient and optimizer settings
-        gradient_checkpointing=True,  # Enable gradient checkpointing
-        torch_compile=False,          # Unsloth handles optimization differently
-    )
-    
+    # Create the TrainingSpeedCallback to track training performance
     training_speed_tracker = TrainingSpeedCallback()
     
-    # Initialize Unsloth's trainer
-    trainer = FastLanguageModel.get_trainer(
+    # Initialize trainer using UnslothTrainer
+    trainer = UnslothTrainer(
         model=model,
         tokenizer=tokenizer,
-        args=training_args,
         train_dataset=train_dataset,
-        data_collator=data_collator,
-        callbacks=[training_speed_tracker],
-        max_seq_length=config["max_seq_length"],
         dataset_text_field="text",
+        max_seq_length=config["max_seq_length"],
+        dataset_num_proc=config["num_workers"],
+        args=UnslothTrainingArguments(
+            output_dir=output_dir,
+            overwrite_output_dir=True,
+            per_device_train_batch_size=config["batch_size"],
+            gradient_accumulation_steps=config["gradient_accumulation_steps"],
+            save_steps=1000,
+            save_total_limit=2,
+            logging_steps=10,
+            logging_dir="./logs",
+            
+            # Mixed precision settings
+            bf16=is_bfloat16_supported(),
+            fp16=not is_bfloat16_supported(),
+            
+            learning_rate=config["learning_rate"],
+            weight_decay=0.01,
+            warmup_steps=50 if config.get('testing_mode', False) else 500,
+            max_steps=max_steps,
+            
+            # No evaluation dataset
+            eval_strategy="no",  # Changed from evaluation_strategy to avoid deprecation warning
+            report_to="wandb",
+            lr_scheduler_type="cosine",
+            
+            # Performance options
+            disable_tqdm=False,
+            
+            # Gradient and optimizer settings
+            gradient_checkpointing=True,
+            
+            # Seed for reproducibility
+            seed=42
+        ),
+        callbacks=[training_speed_tracker]
     )
     
     # Start training
-    print("Starting Unsloth-accelerated training with streaming dataset...")
+    print("Starting Unsloth-accelerated training...")
     trainer.train()
     
     # Save model locally and in wandb
