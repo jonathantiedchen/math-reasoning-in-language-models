@@ -15,7 +15,7 @@ from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments,
 # Keep PEFT for printing trainable parameters
 from peft import TaskType
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -51,10 +51,13 @@ wandb_config = {
 # Initialize wandb run for tracking overall process
 run = wandb.init(
     entity="master_thesis_math_lm",
-    project="mistral-math-lora", 
+    project="mistral-math-lora-test", 
     name="mistral-7b-curriculum-learning-unsloth",
     config=wandb_config
 )
+
+# Store the main run ID
+main_run_id = run.id
 
 # Check for available hardware
 device = get_device()
@@ -92,8 +95,9 @@ def tokenize_function(examples):
 # Create the TrainingSpeedCallback to track training performance
 training_speed_tracker = TrainingSpeedCallback()
 
-# Keep a list of sub-runs to finish later
-dataset_runs = []
+# Finish the main run before starting dataset-specific runs
+# We'll reinitialize it at the end
+wandb.finish()
 
 # Iterate through datasets in curriculum order
 for dataset_name, dataset_samples in dataset_dict.items():
@@ -103,15 +107,13 @@ for dataset_name, dataset_samples in dataset_dict.items():
     
     # Initialize a new wandb run for each dataset
     dataset_run = wandb.init(
-        project="mistral-math-lora", 
+        entity="master_thesis_math_lm",  # Add entity here for consistency
+        project="mistral-math-lora-test",  # Use the same project name as main run
         name=f"mistral-7b-{dataset_name}-unsloth",
         config=wandb_config,
         # Add this to ensure a new run is created each time
         reinit=True
     )
-    
-    # Keep track of all dataset runs
-    dataset_runs.append(dataset_run)
     
     # For each dataset, we need to start with a fresh LoRA configuration
     # Apply LoRA using Unsloth's adapter
@@ -211,7 +213,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     tokenizer.save_pretrained(model_save_path)
     print(f"Unsloth-optimized model for {dataset_name} saved to {model_save_path}")
     
-    # Log model to dataset-specific wandb run
+    # Log model to wandb
     artifact = wandb.Artifact(f"mistral-math-unsloth-{model_name}", type="model")
     artifact.add_dir(model_save_path)
     dataset_run.log_artifact(artifact)
@@ -249,39 +251,29 @@ for dataset_name, dataset_samples in dataset_dict.items():
             "gpu_max_allocated_memory_gb": gpu_stats.get("allocated_bytes.all.peak", 0) / 1e9,
         })
     
-    # DON'T finish the dataset run here - we'll finish all runs at the end
+    # Finish the dataset-specific wandb run
+    wandb.finish()
 
-# Create a new run for the final model
-final_run = wandb.init(
-    project="mistral-math-lora", 
-    name="mistral-7b-curriculum-final-unsloth",
-    config=wandb_config,
-    reinit=True
-)
-
-# Log the final model (after all curriculum steps)
+# Log the final model (after all curriculum steps) - MOVED OUTSIDE THE LOOP
 print("\nCurriculum learning complete!")
 final_model_path = f"./models/mistral-7b-curriculum-unsloth/final"
 os.makedirs(final_model_path, exist_ok=True)
 model.save_pretrained(final_model_path)
 tokenizer.save_pretrained(final_model_path)
 
-# Log final model to a new final run
+# Reinitialize the main wandb run to log the final model
+main_run = wandb.init(
+    entity="master_thesis_math_lm",
+    project="mistral-math-lora-test",
+    name="mistral-7b-curriculum-learning-unsloth-final",
+    id=main_run_id,  # Try to resume the main run
+    resume="allow"   # Allow resume if possible
+)
+
+# Log final model to main wandb run
 final_artifact = wandb.Artifact("mistral-math-curriculum-final", type="model")
 final_artifact.add_dir(final_model_path)
-final_run.log_artifact(final_artifact)
+main_run.log_artifact(final_artifact)
 
-# Finish all runs
-for dataset_run in dataset_runs:
-    try:
-        dataset_run.finish()
-    except:
-        pass  # Handle any issues with finishing runs that may already be finished
-        
-final_run.finish()  # Finish the final run
-
-# Also finish the main run if it's still active
-try:
-    run.finish()
-except:
-    pass
+# Finish the main wandb run
+wandb.finish()
