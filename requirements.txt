@@ -16,3 +16,4 @@ trl
 pynvml
 peft
 bitsandbytes
+unsloth

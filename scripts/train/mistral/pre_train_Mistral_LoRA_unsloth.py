@@ -1,7 +1,8 @@
 """
 Train Mistral 7B on OpenWebMath dataset using LoRA and streaming to avoid downloading the full dataset.
 Integrates Weights & Biases (wandb) for tracking.
-Uses 4-bit quantization with bitsandbytes for memory efficiency.
+Uses Unsloth.ai for faster and more efficient training.
+Explicitly adds EOS tokens to ensure proper sequence termination.
 """
 
 import os
@@ -9,20 +10,15 @@ import torch
 import wandb
 import sys
 from transformers import (
-    AutoModelForCausalLM, 
     AutoTokenizer, 
     TrainingArguments, 
-    Trainer, 
     DataCollatorForLanguageModeling
 )
 from datasets import load_dataset
-from peft import (
-    LoraConfig,
-    get_peft_model,
-    TaskType,
-    prepare_model_for_kbit_training
-)
-import bitsandbytes as bnb
+# Import Unsloth
+from unsloth import FastLanguageModel
+# Keep PEFT for LoRA config
+from peft import TaskType
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
 if parent_dir not in sys.path:
@@ -34,7 +30,7 @@ from utils.helper import get_device, TrainingSpeedCallback  # Import custom logg
 def main():
     # Parse command-line arguments for testing mode
     import argparse
-    parser = argparse.ArgumentParser(description='Train Mistral 7B with LoRA on OpenWebMath')
+    parser = argparse.ArgumentParser(description='Train Mistral 7B with Unsloth on OpenWebMath')
     parser.add_argument('--test', action='store_true', help='Run in testing mode with limited data')
     parser.add_argument('--samples', type=int, default=1000, help='Number of samples to use in testing mode')
     args = parser.parse_args()
@@ -47,31 +43,29 @@ def main():
             "shuffle_buffer": 5000,  # Shuffle buffer size for better mixing
             "max_length": 1024,
             "max_steps": 50000,
-            "learning_rate": 5e-5,
-            "batch_size": 8,         # Smaller batch size due to larger model
-            "gradient_accumulation_steps": 4,  # Increased to compensate for smaller batch size
+            "learning_rate": 2e-4,    # Unsloth can handle slightly higher learning rates
+            "batch_size": 8,          # Unsloth is more memory efficient
+            "gradient_accumulation_steps": 4,
             "num_workers": 4,         # Parallel data loading
             "prefetch_factor": 2,     # Prefetch factor for data loading
             # LoRA specific parameters
             "lora_r": 16,             # LoRA attention dimension
             "lora_alpha": 32,         # LoRA alpha parameter
             "lora_dropout": 0.05,     # Dropout probability for LoRA layers
-            # Quantization parameters
-            "quantization_bits": 4,   # Fixed to 4-bit quantization
-            "load_in_4bit": True,     # Use 4-bit quantization
-            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            # Unsloth specific
+            "max_seq_length": 2048,   # Unsloth can handle longer sequences efficiently
             # Testing parameters
             "testing_mode": args.test,                 # Set from command line args
             "test_sample_size": args.samples           # Set from command line args
     }
 
     # Set the output directories
-    output_dir = "./models/mistral-7b-math-lora"
+    output_dir = "./models/mistral-7b-math-lora-unsloth"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
     # Initialize wandb - add testing tag if in testing mode
-    run_name = "mistral-7b-openwebmath-lora-4bit"
+    run_name = "mistral-7b-openwebmath-unsloth"
     if config.get('testing_mode', False):
         run_name += "-test"
     
@@ -79,48 +73,46 @@ def main():
         project="mistral-math-lora", 
         name=run_name,
         config=config,
-        tags=["4bit", "testing"] if config.get('testing_mode', False) else ["4bit"]
+        tags=["unsloth", "testing"] if config.get('testing_mode', False) else ["unsloth"]
     )
 
     # Check for available hardware
     device = get_device()
+    print(f"Using device: {device}")
     
-    # Load model and tokenizer
+    # Load model and tokenizer with Unsloth's FastLanguageModel
     model_name = config['model_name']
-    print(f"Loading pre-trained model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    print(f"Loading pre-trained model with Unsloth: {model_name}")
     
-    # Load model with 4-bit quantization
-    print("Loading model with 4-bit quantization...")
-    
-    # Load the model with 4-bit quantization
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        load_in_4bit=True,
-        device_map="auto",
-        torch_dtype=torch.float16
+    # Load the model with Unsloth optimizations
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=model_name,
+        max_seq_length=config['max_seq_length'],
+        dtype=torch.bfloat16,  # Using bfloat16 for better training stability
+        load_in_4bit=True      # Unsloth works very well with 4-bit quantization
     )
     
-    # Set padding token
+    # Store the EOS token for use in data processing
+    EOS_TOKEN = tokenizer.eos_token
+    print(f"Using EOS token: {EOS_TOKEN}")
+    
+    # Set padding token if needed
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = model.config.eos_token_id
     
-    # Prepare model for LoRA training with quantization
-    model = prepare_model_for_kbit_training(model)
-    
-    # Define LoRA configuration
-    lora_config = LoraConfig(
+    # Apply LoRA using Unsloth's adapter
+    model = FastLanguageModel.get_peft_model(
+        model,
         r=config['lora_r'],
         lora_alpha=config['lora_alpha'],
-        target_modules=config['target_modules'],
         lora_dropout=config['lora_dropout'],
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj", 
+            "gate_proj", "up_proj", "down_proj"
+        ],
         bias="none",
         task_type=TaskType.CAUSAL_LM
     )
-    
-    # Apply LoRA to the model
-    model = get_peft_model(model, lora_config)
     
     # Print trainable parameters info
     model.print_trainable_parameters()
@@ -139,24 +131,19 @@ def main():
         print(f"TESTING MODE: Limiting dataset to {config['test_sample_size']} examples")
         train_dataset = train_dataset.take(config['test_sample_size'])
 
-    # Define custom Tokenization function
-    def tokenize_function(examples, config=config):
-        return tokenizer(
-            examples["text"],
-            truncation=True,
-            max_length=config['max_length'],
-            padding="max_length",
-            return_tensors="pt"
-        )
-    
-    # Apply tokenization to the dataset
+    # Define prompt formatting function that explicitly adds EOS token
+    def format_prompt(example):
+        # Explicitly add EOS token to the end of each example to ensure proper sequence termination
+        return {
+            "text": example["text"] + EOS_TOKEN,
+        }
+
+    # Map formatting to dataset
     train_dataset = train_dataset.map(
-        tokenize_function,
-        batched=True,
-        batch_size=32,  # Process in smaller batches
-        remove_columns=["url", "date", "metadata", "text"]
+        format_prompt,
+        remove_columns=["url", "date", "metadata"]
     )
-    
+
     # Create data collator for language modeling
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
@@ -166,6 +153,7 @@ def main():
     # For testing: set a much smaller number of steps
     max_steps = 100 if config.get('testing_mode', False) else config["max_steps"]
     
+    # Unsloth recommends slightly different training args
     training_args = TrainingArguments(
         output_dir=output_dir,
         overwrite_output_dir=True,
@@ -176,14 +164,14 @@ def main():
         logging_steps=10,
         logging_dir="./logs",
         
-        # Mixed precision settings - using FP16
-        fp16=True,
+        # Mixed precision settings
+        bf16=True,  # Using bfloat16 instead of fp16 with Unsloth
         dataloader_num_workers=config["num_workers"],
         dataloader_pin_memory=True,
         learning_rate=config["learning_rate"],
         weight_decay=0.01,
-        warmup_steps=50 if config.get('testing_mode', False) else 500,  # Reduced warmup for testing
-        max_steps=max_steps,  # Use reduced steps for testing mode
+        warmup_steps=50 if config.get('testing_mode', False) else 500,
+        max_steps=max_steps,
         evaluation_strategy="no",
         report_to="wandb",
         lr_scheduler_type="cosine",
@@ -192,53 +180,46 @@ def main():
         disable_tqdm=False,
         
         # Gradient and optimizer settings
-        gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
-        torch_compile=False,  # Disable torch compile for LoRA compatibility
+        gradient_checkpointing=True,  # Enable gradient checkpointing
+        torch_compile=False,          # Unsloth handles optimization differently
     )
-    
     
     training_speed_tracker = TrainingSpeedCallback()
     
-    # Initialize trainer
-    trainer = Trainer(
+    # Initialize Unsloth's trainer
+    trainer = FastLanguageModel.get_trainer(
         model=model,
+        tokenizer=tokenizer,
         args=training_args,
-        data_collator=data_collator,
         train_dataset=train_dataset,
-        callbacks=[training_speed_tracker]
+        data_collator=data_collator,
+        callbacks=[training_speed_tracker],
+        max_seq_length=config["max_seq_length"],
+        dataset_text_field="text",
     )
     
     # Start training
-    print("Starting LoRA training with 4-bit quantization and streaming dataset...")
+    print("Starting Unsloth-accelerated training with streaming dataset...")
     trainer.train()
     
     # Save model locally and in wandb
     model_save_path = f"{output_dir}/final"
     model.save_pretrained(model_save_path)
     tokenizer.save_pretrained(model_save_path)
-    print(f"LoRA model saved to {model_save_path}")
+    print(f"Unsloth-optimized model saved to {model_save_path}")
     
     # Log model to wandb
-    artifact = wandb.Artifact("mistral-7b-math-lora-4bit-model", type="model")
+    artifact = wandb.Artifact("mistral-7b-math-unsloth-model", type="model")
     artifact.add_dir(model_save_path)
     run.log_artifact(artifact)
     
-
     ############
     ### Sample generation to test the model
     print("\nGenerating sample output...")
     test_prompt = "The solution to the integral of x^2 is"
     
-    # Move to CPU for inference if needed (due to memory constraints)
-    if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 40 * 1024 * 1024 * 1024:
-        # If we have a high-memory GPU (40+ GB), we can do inference there
-        input_device = device
-    else:
-        # Otherwise, do inference on CPU
-        input_device = "cpu"
-        model = model.to(input_device)
-    
-    input_ids = tokenizer(test_prompt, return_tensors="pt").input_ids.to(input_device)
+    # For inference, we can use the model as is on GPU if available
+    input_ids = tokenizer(test_prompt, return_tensors="pt").input_ids.to(device)
     
     with torch.no_grad():
         outputs = model.generate(
