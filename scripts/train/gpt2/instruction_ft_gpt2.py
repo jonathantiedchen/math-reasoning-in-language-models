@@ -1,302 +1,179 @@
-"""
-Instruction fine-tuning for a pre-trained GPT-2 math model using MathInstruct dataset.
-Loads the base model from wandb artifacts.
-Allows filtering by source, limiting sample count, and uses streaming for efficiency.
-Integrates Weights & Biases (wandb) for tracking.
-"""
-
 import os
 import torch
 import wandb
-import sys
-from transformers import (
-    AutoModelForCausalLM, 
-    AutoTokenizer, 
-    TrainingArguments, 
-    Trainer, 
-    DataCollatorForLanguageModeling
-)
+import math
 from datasets import load_dataset
+from transformers import (
+    GPT2LMHeadModel,
+    GPT2Tokenizer,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
+    integrations
+)
+from transformers.integrations import WandbCallback
 from collections import Counter
 
-# Define this filter function outside main() so it can be pickled properly
-def exclude_sources_by_prefix(example, prefixes_to_exclude):
-    """Filter function to exclude sources starting with specified prefixes."""
-    source = example["source"]
-    for prefix in prefixes_to_exclude:
-        if source.startswith(prefix):
-            return False
-    return True
-
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-try:
-    from utils.helper import get_device
-except ImportError:
-    # Fallback implementation if the helper module is not available
-    def get_device():
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            return torch.device("mps")
-        else:
-            return torch.device("cpu")
-
-def main():
-    # create wandb config to log parameter
-    config = {
-        "model_name": "gpt2-math-model",  # The artifact name in wandb
-        "output_model_name": "gpt2-math-instruct",  # Name for the fine-tuned model
+# Initialize Weights & Biases with more configuration options
+wandb.init(
+    entity="master_thesis_math_lm",
+    project="gpt2-math-instruct",
+    name="first-remake-instruction-learning",
+    config={
+        "model_name": "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v1",
         "dataset": "TIGER-Lab/MathInstruct",
-        "streaming": True,
-        "shuffle_buffer": 10000,  # Buffer size for better mixing
-        "max_length": 512,
-        "max_steps": 25,            
-        "learning_rate": 2e-5,         
-        "batch_size": 8,              
-        "gradient_accumulation_steps": 8,
-        "num_workers": 4,              
-        "prefetch_factor": 2,          
-        "max_samples": 10,          # Maximum number of samples to use
-        "sources_to_exclude": ["data/PoT/"],      # Use just the prefix to exclude all PoT sources
-        "wandb_artifact_path": "master_thesis_math_lm/gpt2-math/gpt2-math-model:v0",  # Path to the artifact
+        "batch_size": 32,  # Reduced batch size
+        "gradient_accumulation_steps": 4,  # Added gradient accumulation
+        "learning_rate": 5e-5,
+        "epochs": 1,
+        "max_steps": 1000,
+        "num_workers": 4,
     }
+)
 
-    # Set the output directories
-    output_dir = "./models/mathgpt2sft/"
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs("./logs", exist_ok=True)
-    
-    # Initialize wandb
-    run = wandb.init(
-        project="math-instruct", 
-        name=config['output_model_name'],
-        config=config
-    )
+# Load pre-trained model and tokenizer from Weights & Biases
+model_name = "master_thesis_math_lm/gpt2-math/gpt2-math-sft-final:v1"
+# First, download the model from W&B
+wandb_artifact = wandb.use_artifact(model_name)
+model_dir = wandb_artifact.download()
+# Load the model and tokenizer from the downloaded directory
+tokenizer = GPT2Tokenizer.from_pretrained(model_dir)
+model = GPT2LMHeadModel.from_pretrained(model_dir)
 
-    # Check for available hardware
-    device = get_device()
-    print(f"Using device: {device}")
-    
-    # Load model from wandb artifact
-    print(f"Loading pre-trained model from wandb artifact: {config['wandb_artifact_path']}")
-    artifact = run.use_artifact(config['wandb_artifact_path'])
-    model_dir = artifact.download()
-    
-    # Load tokenizer and model from the downloaded directory
-    print(f"Loading model and tokenizer from {model_dir}")
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    model = AutoModelForCausalLM.from_pretrained(model_dir)
-    
-    # Set padding token directly
+# GPT-2 tokenizer doesn't have a padding token by default
+if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = model.config.eos_token_id
-    
-    # Load MathInstruct dataset in streaming mode
-    print("Loading MathInstruct dataset in streaming mode...")
-    dataset = load_dataset("TIGER-Lab/MathInstruct", streaming=config["streaming"])
-    
-    # For streaming mode, collect source information from a small sample
-    if config["streaming"]:
-        # Sample some examples to analyze sources
-        sample_size = 1000
-        source_sample = []
-        sample_iter = iter(dataset["train"])
-        for _ in range(sample_size):
-            try:
-                example = next(sample_iter)
-                source_sample.append(example["source"])
-            except StopIteration:
-                break
-        
-        source_counts = Counter(source_sample)
-        print(f"\nSources in sample of {len(source_sample)} examples:")
-    else:
-        # If not streaming, analyze the full dataset
-        source_counts = Counter(dataset["train"]["source"])
-        print("\nDistinct sources in the dataset:")
-    
-    # Print source distribution
-    for source, count in source_counts.items():
-        print(f"- {source}: {count} examples")
-    
-    # Log source distribution to wandb
-    wandb.log({"source_distribution": wandb.Table(
-        columns=["Source", "Count"], 
-        data=[[source, count] for source, count in source_counts.items()]
-    )})
-    
-    # Apply source filtering if needed
-    train_dataset = dataset["train"]
-    
-    if config["sources_to_exclude"]:
-        print(f"Filtering to exclude sources starting with: {config['sources_to_exclude']}")
-        # Define a proper function to use with filter (avoid using lambda)
-        def filter_function(example):
-            return exclude_sources_by_prefix(example, config["sources_to_exclude"])
-        
-        train_dataset = train_dataset.filter(filter_function)
-    
-    # Shuffle the dataset using buffer
-    shuffle_buffer_size = config['shuffle_buffer']
-    print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
-    train_dataset = train_dataset.shuffle(buffer_size=shuffle_buffer_size)
-    
-    # Limit to max_samples if specified
-    if config["max_samples"]:
-        print(f"Taking first {config['max_samples']} examples after shuffling")
-        train_dataset = train_dataset.take(config["max_samples"])
-    
-    # Prepare the prompt template function
-    def prepare_instruction_data(examples):
-        """Format the instruction data in a format suitable for GPT-2"""
-        
-        # Create formatted instruction texts
-        formatted_texts = []
-        
-        for i in range(len(examples["instruction"])):
-            instruction = examples["instruction"][i]
-            output = examples["output"][i]
-            
-            # Format with Instruction and Response prefixes
-            formatted_text = f"Instruction\n{instruction}\nResponse\n{output}"
-            formatted_texts.append(formatted_text)
-        
-        return {"formatted_text": formatted_texts}
-    
-    # Apply the formatting
-    processed_dataset = train_dataset.map(
-        prepare_instruction_data,
-        batched=True,
-        remove_columns=["instruction", "output", "source"]
-    )
-    
-    # Print a sample of the formatted data
-    sample_iter = iter(processed_dataset)
-    sample_example = next(sample_iter)
-    print(f"\nSample formatted instruction data:\n{sample_example['formatted_text']}")
-    
-    # Tokenize the formatted text
-    def tokenize_function(examples):
-        return tokenizer(
-            examples["formatted_text"],
-            truncation=True,
-            max_length=config['max_length'],
-            padding="max_length",
-            return_tensors="pt"
-        )
-    
-    tokenized_dataset = processed_dataset.map(
-        tokenize_function,
-        batched=True,
-        batch_size=64,
-        remove_columns=["formatted_text"]
-    )
-    
-    # Create data collator for language modeling
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False  # GPT-2 uses causal language modeling, not masked
-    )
-    
-    # Define training arguments
-    training_args = TrainingArguments(
-        output_dir=output_dir,                          # Directory where model checkpoints and logs will be saved
-        overwrite_output_dir=True,                      # If output_dir exists, overwrite instead of erroring
-        per_device_train_batch_size=config["batch_size"], # Number of samples processed per GPU during training
-        gradient_accumulation_steps=config["gradient_accumulation_steps"], # Number of forward passes before updating parameters
-        save_steps=1000,                                # Save a checkpoint every 1000 steps
-        save_total_limit=2,                             # Keep only the 2 most recent checkpoints to save disk space
-        logging_steps=10,                               # Log metrics every 10 steps for more detailed monitoring
-        logging_dir="./logs",                           # Directory for storing training logs
-        
-        # Hardware optimizations
-        bf16=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8,  # Use BF16 on Ampere or newer GPUs
-        bf16_full_eval=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8,  # Use BF16 during evaluation as well
-        fp16=torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 8,  # Fallback to FP16 on older GPUs
-        dataloader_num_workers=0,                       # Fix the pickling issue by disabling multiprocessing (or set to 0)
-        dataloader_pin_memory=True,                     # Pin memory in CPU to accelerate CPU to GPU transfer
-        learning_rate=config["learning_rate"],          # Initial learning rate for the optimizer
-        weight_decay=0.01,                              # L2 regularization factor to prevent overfitting
-        warmup_steps=200,                               # Gradually increase learning rate for first 200 steps for stability
-        max_steps=config["max_steps"],                  # Total number of training steps
-        evaluation_strategy="no",                       # Disable evaluation during training
-        report_to="wandb",                              # Log metrics to Weights & Biases for visualization
-        
-        # Performance options
-        disable_tqdm=False,                             # Show progress bar for monitoring training progress
-        
-        # Advanced optimization (PyTorch 2.0+)
-        torch_compile=True,                             # Enable PyTorch compiler for just-in-time optimization
-    )
 
-    # Initialize trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        data_collator=data_collator,
-        train_dataset=tokenized_dataset,
+# Load the TIGER-Lab/MathInstruct dataset - just the train split
+dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
+print(f"Dataset loaded: {len(dataset)} examples")
+
+# Print the source distribution before filtering
+source_counts = Counter(dataset["source"])
+print("\nSource distribution before filtering:")
+for source, count in sorted(source_counts.items(), key=lambda x: x[1], reverse=True):
+    print(f"{source}: {count} examples")
+
+# Print count of examples that will be filtered out
+pot_examples = [example for example in dataset["source"] if example.startswith("data/PoT/")]
+print(f"\nNumber of examples with source starting with 'data/PoT/': {len(pot_examples)}")
+
+# Filter out examples where source starts with "data/PoT/"
+def filter_pot_sources(example):
+    return not example["source"].startswith("data/PoT/")
+
+# Apply the filter to the dataset
+filtered_dataset = dataset.filter(filter_pot_sources)
+print(f"\nFiltered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} PoT examples)")
+
+# Print the source distribution after filtering
+filtered_source_counts = Counter(filtered_dataset["source"])
+print("\nSource distribution after filtering:")
+for source, count in sorted(filtered_source_counts.items(), key=lambda x: x[1], reverse=True):
+    print(f"{source}: {count} examples")
+
+# Log source distribution to W&B
+wandb.log({"source_distribution_before": source_counts})
+wandb.log({"source_distribution_after": filtered_source_counts})
+
+# Function to tokenize and prepare the dataset
+def tokenize_function(examples):
+    # Concatenate instructions and outputs with appropriate formatting
+    texts = []
+    for instruction, output in zip(examples["instruction"], examples["output"]):
+        # Format: Instruction: [instruction] Output: [output]
+        formatted_text = f"Instruction: {instruction}\nOutput: {output}"
+        texts.append(formatted_text)
+    
+    # Tokenize with padding but use a smaller max_length
+    tokenized_inputs = tokenizer(
+        texts,
+        padding="max_length",
+        truncation=True,
+        max_length=1024,  # Reduced from 1024 to save memory
+        return_tensors="pt"
     )
     
-    # Enable cudnn benchmark for faster training
-    torch.backends.cudnn.benchmark = True
+    # Set up labels for language modeling (same as input_ids)
+    tokenized_inputs["labels"] = tokenized_inputs["input_ids"].clone()
     
-    # Start training
-    print("Starting instruction fine-tuning...")
-    trainer.train()
-    
-    # Save model locally and in wandb
-    model_save_path = f"{output_dir}/final"
-    model.save_pretrained(model_save_path)
-    tokenizer.save_pretrained(model_save_path)
-    print(f"Model saved to {model_save_path}")
-    
-    # Log model to wandb
-    artifact = wandb.Artifact(config['output_model_name'], type="model")
-    artifact.add_dir(model_save_path)
-    run.log_artifact(artifact)
-    
-    # Sample generation to test the model
-    print("\nGenerating sample outputs...")
-    test_prompts = [
-        "Instruction\nSolve the equation 2x + 3 = 7\nResponse\n",
-        "Instruction\nFind the derivative of f(x) = x^2 * sin(x)\nResponse\n",
-        "Instruction\nCalculate the area of a circle with radius 5 cm\nResponse\n"
-    ]
-    
-    model = model.to(device)
-    for prompt in test_prompts:
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
-        
-        with torch.no_grad():
-            outputs = model.generate(
-                input_ids,
-                max_length=200,
-                temperature=0.7,
-                num_return_sequences=1,
-                pad_token_id=tokenizer.eos_token_id
-            )
-        
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print(f"\nPrompt: {prompt}")
-        print(f"Generated: {generated_text}")
-        
-        # Log the generated text to wandb
-        wandb.log({"example_generation": wandb.Html(f"<p><strong>Prompt:</strong> {prompt}</p><p><strong>Generated:</strong> {generated_text}</p>")})
-    
-    # Log training performance metrics
-    if torch.cuda.is_available():
-        gpu_stats = torch.cuda.memory_stats()
-        wandb.log({
-            "gpu_allocated_memory_gb": torch.cuda.memory_allocated() / 1e9,
-            "gpu_reserved_memory_gb": torch.cuda.memory_reserved() / 1e9,
-            "gpu_max_allocated_memory_gb": gpu_stats.get("allocated_bytes.all.peak", 0) / 1e9,
-        })
-    
-    # Finish the wandb run
-    wandb.finish()
+    return tokenized_inputs
 
-if __name__ == "__main__":
-    main()
+# Tokenize the FILTERED dataset - this is the important fix
+tokenized_dataset = filtered_dataset.map(
+    tokenize_function,
+    batched=True,
+    batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
+    remove_columns=filtered_dataset.column_names,
+    desc="Tokenizing training dataset"
+)
+
+print(f"\nPrepared training dataset: {len(tokenized_dataset)} examples")
+
+# Free up some memory
+torch.cuda.empty_cache()
+
+# Data collator for language modeling
+data_collator = DataCollatorForLanguageModeling(
+    tokenizer=tokenizer,
+    mlm=False  # We're not doing masked language modeling
+)
+
+# Set up training arguments with memory optimizations
+training_args = TrainingArguments(
+    output_dir="./models/mathgpt2instruct",
+    overwrite_output_dir=True,
+    num_train_epochs=1,
+    dataloader_num_workers=8,
+    per_device_train_batch_size=32,
+    gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
+    save_steps=1000,
+    save_total_limit=2,
+    max_steps=25000,
+    logging_steps=100,
+    learning_rate=5e-5,
+    weight_decay=0.01,
+    warmup_steps=100,
+    report_to="wandb",
+    fp16=True,  # Keep mixed precision
+    optim="adamw_torch_fused",  # Use memory-efficient optimizer
+    dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
+    gradient_checkpointing=True,  # Trade compute for memory
+    group_by_length=True,  # Reduce padding by grouping similar lengths
+)
+
+# Initialize the Trainer with W&B callback for enhanced logging
+wandb_callback = WandbCallback()
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    data_collator=data_collator,
+    train_dataset=tokenized_dataset,
+    callbacks=[wandb_callback],
+)
+
+# Train the model
+print("Starting training...")
+trainer.train()
+print("Training completed!")
+
+# Save the fine-tuned model
+model_save_path = "./models/gpt2-math-instruct"
+trainer.save_model(model_save_path)
+tokenizer.save_pretrained(model_save_path)
+print(f"Model saved to {model_save_path}")
+
+# Log the model to Weights & Biases
+artifact = wandb.Artifact(
+    name="gpt2-math-model-finetuned",
+    type="model"
+)
+artifact.add_dir(model_save_path)
+wandb.log_artifact(artifact)
+#run.log_artifact(artifact)
+
+# Finish the W&B run
+wandb.finish()
+
+print("Fine-tuning process completed successfully!")
