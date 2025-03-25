@@ -136,8 +136,9 @@ def main():
         input_text = FEW_SHOT_PROMPT.format(question=example['question'])
         if i == 0:  # Print an example of the prompt for the first question
             print(f"EXAMPLE PROMPT: {input_text[:500]}...\n")
-        
-        inputs = tokenizer(input_text, return_tensors='pt').to(model.device)
+
+        max_length = 1024 if "gpt2" in args.model.lower() else model.config.max_position_embeddings
+        inputs = tokenizer(input_text, return_tensors="pt", truncation=True, max_length=max_length).to(model.device)
         ground_truth_answer = extract_ground_truth(example['answer'])
 
         stop_criteria = SpecificStringStoppingCriteria(tokenizer, generation_util, len(input_text))
@@ -147,7 +148,9 @@ def main():
         if args.use_majority_vote:
             for _ in range(args.n_votes):
                 with torch.no_grad():
-                    outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=512, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                    if "gpt2" in args.model.lower(): 
+                        outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=256, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                    else: outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=512, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
                 output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 # Extract the final answer from the model's output
                 output_text = output_text.split("A:")[-1].strip() 
@@ -155,7 +158,11 @@ def main():
                 model_answers.append({'text': output_text, 'numeric': model_answer})
         else:
             with torch.no_grad():
-                outputs = model.generate(**inputs, max_new_tokens=512, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                if "gpt2" in args.model.lower(): 
+                    outputs = model.generate(**inputs, max_new_tokens=256, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                else: 
+                    outputs = model.generate(**inputs, max_new_tokens=256, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+
             output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
             output_text = output_text.split("A:")[-1].strip() 
             model_answer = extract_predicted_answer(output_text)
