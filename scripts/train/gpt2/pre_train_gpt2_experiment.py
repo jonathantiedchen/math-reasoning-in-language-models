@@ -17,7 +17,7 @@ from transformers import (
 )
 from datasets import load_dataset
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -35,8 +35,8 @@ def main():
             "max_length": 1024,
             "max_steps": 50000,
             "learning_rate": 5e-5,
-            "batch_size": 64,  # Increased from 8 to better utilize H100
-            "gradient_accumulation_steps": 2,  
+            "batch_size": 32,  # Increased from 8 to better utilize H100
+            "gradient_accumulation_steps": 1,  
             "num_workers": 4,  # Parallel data loading
             "prefetch_factor": 4  # Prefetch factor for data loading
     }
@@ -48,7 +48,7 @@ def main():
     
     # Initialize wandb
     run = wandb.init(
-        project="gpt2-math", 
+        project="gpt2-math-test", 
         name="gpt2-openwebmath-pre_training",
         config=config
     )
@@ -221,8 +221,7 @@ def main():
         model=model,
         args=training_args,
         data_collator=data_collator,
-        train_dataset=train_dataset,
-        callbacks=[wandb_logger, memory_manager]  # Added memory manager to callbacks
+        train_dataset=train_dataset
     )
     
     # Enable cudnn benchmark for faster training
