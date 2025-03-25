@@ -51,11 +51,8 @@ A:"""
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='mistralai/Mistral-7B-v0.1', help='HuggingFace model path or name')
-    parser.add_argument('--use_wandb', action='store_true', help='Use a model from Weights & Biases')
-    parser.add_argument('--wandb_entity', type=str, help='W&B username or team name')
-    parser.add_argument('--wandb_project', type=str, help='W&B project name')
-    parser.add_argument('--wandb_model_artifact', type=str, help='W&B model artifact name (e.g., "run_name/model:v0")')
-    parser.add_argument('--wandb_tokenizer_artifact', type=str, help='W&B tokenizer artifact name (if different from model)')
+    parser.add_argument('--wandb_artifact', type=str, help='Full W&B artifact link (e.g., "username/project/model:v0")')
+    parser.add_argument('--wandb_tokenizer_artifact', type=str, help='W&B tokenizer artifact (if different from model)')
     parser.add_argument('--use_majority_vote', action='store_true')
     parser.add_argument("--temp", type=float, default=0)
     parser.add_argument('--n_votes', type=int, default=1)
@@ -70,30 +67,28 @@ def main():
 
     print('Loading model and tokenizer...')
     
-    if args.use_wandb:
+    if args.wandb_artifact:
         # Login to Weights & Biases (requires API key in environment variable or login)
         if not wandb.api.api_key:
             print("W&B API key not found. Please run 'wandb login' or set the WANDB_API_KEY environment variable.")
             return
             
-        print(f"Downloading model from W&B: {args.wandb_model_artifact}")
+        print(f"Downloading model from W&B: {args.wandb_artifact}")
         
         # Setup model download directory
-        model_download_dir = os.path.join('wandb_models', args.wandb_model_artifact.replace('/', '_'))
+        artifact_safe_name = args.wandb_artifact.replace('/', '_').replace(':', '_')
+        model_download_dir = os.path.join('wandb_models', artifact_safe_name)
         os.makedirs(model_download_dir, exist_ok=True)
         
-        # Download model from W&B
+        # Download model from W&B using run.use_artifact approach
         try:
-            # Initialize W&B with entity and project
-            api = wandb.Api()
-            
-            # Get model artifact
-            model_artifact = api.artifact(f"{args.wandb_entity}/{args.wandb_project}/{args.wandb_model_artifact}")
-            model_dir = model_artifact.download(root=model_download_dir)
+            run = wandb.init(project="model_evaluation", job_type="inference")
+            artifact = run.use_artifact(args.wandb_artifact, type='model')
+            model_dir = artifact.download(root=model_download_dir)
             
             # Get tokenizer artifact (if specified, otherwise use the same as model)
             if args.wandb_tokenizer_artifact:
-                tokenizer_artifact = api.artifact(f"{args.wandb_entity}/{args.wandb_project}/{args.wandb_tokenizer_artifact}")
+                tokenizer_artifact = run.use_artifact(args.wandb_tokenizer_artifact, type='model')
                 tokenizer_dir = tokenizer_artifact.download(root=model_download_dir)
             else:
                 tokenizer_dir = model_dir
@@ -101,6 +96,9 @@ def main():
             # Load model and tokenizer from downloaded paths
             model = AutoModelForCausalLM.from_pretrained(model_dir, device_map='auto', torch_dtype=torch.float16)
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+            
+            # Finish the run
+            wandb.finish()
             
         except Exception as e:
             print(f"Error downloading model from W&B: {e}")
@@ -190,8 +188,8 @@ def main():
     os.makedirs('eval_results/few_shot', exist_ok=True)
     
     # Determine model name for results file
-    if args.use_wandb:
-        model_name = args.wandb_model_artifact.split('/')[-1].replace(':', '_')
+    if args.wandb_artifact:
+        model_name = args.wandb_artifact.split('/')[-1].replace(':', '_')
     else:
         model_name = args.model.split('/')[-1]
     
