@@ -3,6 +3,7 @@ Train Mistral 7B on OpenWebMath dataset using LoRA.
 Integrates Weights & Biases (wandb) for tracking.
 Uses Unsloth.ai for faster and more efficient training.
 Explicitly adds EOS tokens to ensure proper sequence termination.
+Uses batched processing to minimize memory usage.
 """
 
 import os
@@ -14,16 +15,17 @@ from transformers import (
     TrainingArguments
 )
 from datasets import load_dataset
-# Import Unsloth and the UnslothTrainer
+
+# Import Unsloth and the UnslothTrainer for LoRA training
 from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments, is_bfloat16_supported
-# Keep PEFT for LoRA config
-from peft import TaskType
+
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from utils.helper import get_device, TrainingSpeedCallback  # Import custom logger
+
 
 
 def main():
@@ -36,22 +38,26 @@ def main():
 
     # create wandb config to log parameter
     config = {
-            "model_name": "mistralai/Mistral-7B-v0.1",
+            "model_name": "unsloth/mistral-7b-bnb-4bit",
             "dataset": "open-web-math",
-            "streaming": False,  # Changed to non-streaming
+            "streaming": False,  # We need to use non-streaming but will optimize memory
             "max_length": 1024,
             "max_steps": 50000,
-            "learning_rate": 2e-4,    # Unsloth can handle slightly higher learning rates
-            "batch_size": 8,          # Unsloth is more memory efficient
+            "learning_rate": 5e-5,    # Unsloth can handle slightly higher learning rates
+            "embedding_learning_rate": 5e-6, 
+            "batch_size": 2,          # Unsloth is more memory efficient
             "gradient_accumulation_steps": 4,
-            "num_workers": 4,         # Parallel data loading
-            "prefetch_factor": 2,     # Prefetch factor for data loading
+            "num_workers": 8,         # Parallel data loading
+            "prefetch_factor": 4,     # Prefetch factor for data loading
+
             # LoRA specific parameters
             "lora_r": 16,             # LoRA attention dimension
-            "lora_alpha": 32,         # LoRA alpha parameter
-            "lora_dropout": 0.05,     # Dropout probability for LoRA layers
+            "lora_alpha": 16,         # LoRA alpha parameter
+            "lora_dropout": 0,        # Currently not supported    
+
             # Unsloth specific
             "max_seq_length": 2048,   # Unsloth can handle longer sequences efficiently
+
             # Testing parameters
             "testing_mode": args.test,                 # Set from command line args
             "test_sample_size": args.samples           # Set from command line args
@@ -63,7 +69,7 @@ def main():
     os.makedirs("./logs", exist_ok=True)
     
     # Initialize wandb - add testing tag if in testing mode
-    run_name = "mistral-7b-openwebmath-unsloth"
+    run_name = "mistral-7b-openwebmath-unsloth-optimized"
     if config.get('testing_mode', False):
         run_name += "-test"
     
@@ -71,7 +77,7 @@ def main():
         project="mistral-math-lora", 
         name=run_name,
         config=config,
-        tags=["unsloth", "testing"] if config.get('testing_mode', False) else ["unsloth"]
+        tags=["unsloth", "optimized", "testing"] if config.get('testing_mode', False) else ["unsloth", "optimized"]
     )
 
     # Check for available hardware
@@ -107,54 +113,38 @@ def main():
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj", 
             "gate_proj", "up_proj", "down_proj"
-        ],
-        bias="none"
+            "embed_tokens", "lm_head",], # Add for continual pretraining
+        bias="none",
+        use_rslora = True, 
+        loftq_config = None
     )
     
     # Print trainable parameters info
     model.print_trainable_parameters()
+
     
-    # Load dataset in non-streaming mode
-    print("Loading OpenWebMath dataset in non-streaming mode...")
+    print(f"Loading only {config['test_sample_size']} examples")
+    dataset = load_dataset(
+        "open-web-math/open-web-math",
+        split=f"train[:{config['test_sample_size']}]"  # Load just a slice of the dataset
+    )
     
-    # If in testing mode, only load a small subset
-    if config.get('testing_mode', False):
-        print(f"TESTING MODE: Loading only {config['test_sample_size']} examples")
-        dataset = load_dataset(
-            "open-web-math/open-web-math", 
-            streaming=False,
-            split=f"train[:{config['test_sample_size']}]"  # Load just a slice of the dataset
-        )
-    else:
-        # Load the full dataset
-        dataset = load_dataset(
-            "open-web-math/open-web-math", 
-            streaming=False,
-            split="train"
-        )
-    
-    # Shuffle the dataset (non-streaming version)
+    # Shuffle the dataset
     train_dataset = dataset.shuffle(seed=42)
-
-    # Define prompt formatting function that explicitly adds EOS token
-    def format_prompt(example):
-        # When batched=True, example["text"] is a list of texts
-        if isinstance(example["text"], list):
-            # Process a batch of examples
-            return {
-                "text": [text + EOS_TOKEN for text in example["text"]]
-            }
-        else:
-            # Process a single example
-            return {
-                "text": example["text"] + EOS_TOKEN
-            }
-
-    # Map formatting to dataset
+    
+    # Process the dataset with batched operations for memory efficiency
+    # Define a format function that adds EOS tokens
+    def format_prompt(examples):
+        # When batched=True, process multiple examples at once
+        return {
+            "text": [text + EOS_TOKEN for text in examples["text"]]
+        }
+    
+    # Process the dataset in batches to save memory
+    print("Processing dataset with batched operations...")
     train_dataset = train_dataset.map(
         format_prompt,
-        remove_columns=["url", "date", "metadata"]
-        # Removed batched=True to avoid the list concatenation error
+        batched=True
     )
     
     # For testing: set a much smaller number of steps
@@ -181,14 +171,15 @@ def main():
             logging_steps=10,
             logging_dir="./logs",
             
-            # Mixed precision settings
+            # Trainin Parameter
             bf16=is_bfloat16_supported(),
-            fp16=not is_bfloat16_supported(),
-            
             learning_rate=config["learning_rate"],
-            weight_decay=0.01,
-            warmup_steps=50 if config.get('testing_mode', False) else 500,
+            embedding_learning_rate = config["embedding_learning_rate"],
+            weight_decay=0.00,
+            warmup_ration=0.1,
             max_steps=max_steps,
+            optim = "adamw_8bit",
+
             
             # No evaluation dataset
             eval_strategy="no",  # Changed from evaluation_strategy to avoid deprecation warning

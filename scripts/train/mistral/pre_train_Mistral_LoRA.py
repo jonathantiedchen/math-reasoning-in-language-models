@@ -24,7 +24,7 @@ from peft import (
 )
 import bitsandbytes as bnb
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -48,8 +48,8 @@ def main():
             "max_length": 1024,
             "max_steps": 50000,
             "learning_rate": 5e-5,
-            "batch_size": 8,         # Smaller batch size due to larger model
-            "gradient_accumulation_steps": 4,  # Increased to compensate for smaller batch size
+            "batch_size": 4,         # Smaller batch size due to larger model
+            "gradient_accumulation_steps": 2,  # Increased to compensate for smaller batch size
             "num_workers": 4,         # Parallel data loading
             "prefetch_factor": 2,     # Prefetch factor for data loading
             # LoRA specific parameters
