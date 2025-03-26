@@ -118,7 +118,7 @@ def main():
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj", 
             "gate_proj", "up_proj", "down_proj"
-            "embed_tokens", "lm_head",], # Add for continual pretraining
+            "embed_tokens", "lm_head"], # Add for continual pretraining
         bias="none",
         use_gradient_checkpointing="unsloth",
         use_rslora = True, 

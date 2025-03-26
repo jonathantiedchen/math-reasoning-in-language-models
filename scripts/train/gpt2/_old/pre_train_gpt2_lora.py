@@ -41,9 +41,12 @@ def main():
 
         # LoRA configuration
         "lora_r": 16,                # Rank of LoRA matrices
-        "lora_alpha": 32,            # Alpha parameter for LoRA scaling
-        "lora_dropout": 0.05,        # Dropout probability for LoRA layers
-        "lora_target_modules": ["c_attn", "c_proj"], # GPT-2 specific target modules
+        "lora_alpha": 16,            # Alpha parameter for LoRA scaling
+        "lora_dropout": 0.,        # Dropout probability for LoRA layers
+        "lora_target_modules": [
+            "q_proj", "k_proj", "v_proj", "o_proj", 
+            "gate_proj", "up_proj", "down_proj"
+            "embed_tokens", "lm_head"],
 
         # Dataset configuration
         "dataset": "open-web-math",
@@ -52,11 +55,11 @@ def main():
         "max_length": 1024,
 
         # Training configuration
-        "max_steps": 50000,
-        "learning_rate": 5e-4,       # Higher LR for LoRA
+        "max_steps": 5000,
+        "learning_rate": 5e-5,       # Higher LR for LoRA
         "batch_size": 4,            # H100 can handle larger batches with GPT-2 Large
-        "gradient_accumulation_steps": 32,
-        "num_workers": 4,            # Parallel data loading
+        "gradient_accumulation_steps": 4,
+        "num_workers": 8,            # Parallel data loading
         "prefetch_factor": 4,        # Prefetch factor for data loading
         
         # Additional optimizations
