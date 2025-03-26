@@ -115,6 +115,7 @@ def main():
             "gate_proj", "up_proj", "down_proj"
             "embed_tokens", "lm_head",], # Add for continual pretraining
         bias="none",
+        use_gradient_checkpointing="unsloth",
         use_rslora = True, 
         loftq_config = None
     )
