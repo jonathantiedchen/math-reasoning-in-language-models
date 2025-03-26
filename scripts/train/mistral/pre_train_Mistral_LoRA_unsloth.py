@@ -4,6 +4,7 @@ Integrates Weights & Biases (wandb) for tracking.
 Uses Unsloth.ai for faster and more efficient training.
 Explicitly adds EOS tokens to ensure proper sequence termination.
 Uses batched processing to minimize memory usage.
+Supports loading data from local directory.
 """
 
 import os
@@ -14,7 +15,7 @@ from transformers import (
     AutoTokenizer, 
     TrainingArguments
 )
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 
 # Import Unsloth and the UnslothTrainer for LoRA training
 from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments, is_bfloat16_supported
@@ -29,11 +30,12 @@ from utils.helper import get_device, TrainingSpeedCallback  # Import custom logg
 
 
 def main():
-    # Parse command-line arguments for testing mode
+    # Parse command-line arguments for testing mode and local data
     import argparse
     parser = argparse.ArgumentParser(description='Train Mistral 7B with Unsloth on OpenWebMath')
     parser.add_argument('--test', action='store_true', help='Run in testing mode with limited data')
-    parser.add_argument('--samples', type=int, default=1000, help='Number of samples to use in testing mode')
+    parser.add_argument('--samples', type=int, default=5000, help='Number of samples to use in testing mode')
+    parser.add_argument('--local_data', action='store_true', help='Use locally downloaded dataset')
     args = parser.parse_args()
 
     # create wandb config to log parameter
@@ -42,10 +44,10 @@ def main():
             "dataset": "open-web-math",
             "streaming": False,  # We need to use non-streaming but will optimize memory
             "max_length": 1024,
-            "max_steps": 50000,
+            "max_steps": 5000,
             "learning_rate": 5e-5,    # Unsloth can handle slightly higher learning rates
             "embedding_learning_rate": 5e-6, 
-            "batch_size": 2,          # Unsloth is more memory efficient
+            "batch_size": 4,          # Unsloth is more memory efficient
             "gradient_accumulation_steps": 4,
             "num_workers": 8,         # Parallel data loading
             "prefetch_factor": 4,     # Prefetch factor for data loading
@@ -60,7 +62,8 @@ def main():
 
             # Testing parameters
             "testing_mode": args.test,                 # Set from command line args
-            "test_sample_size": args.samples           # Set from command line args
+            "test_sample_size": args.samples,          # Set from command line args
+            "use_local_data": args.local_data          # Set from command line args
     }
 
     # Set the output directories
@@ -69,15 +72,17 @@ def main():
     os.makedirs("./logs", exist_ok=True)
     
     # Initialize wandb - add testing tag if in testing mode
-    run_name = "mistral-7b-openwebmath-unsloth-optimized"
+    run_name = "mistral-7b-openwebmath-unsloth"
     if config.get('testing_mode', False):
         run_name += "-test"
+    if config.get('use_local_data', False):
+        run_name += "-local"
     
     run = wandb.init(
-        project="mistral-math-lora", 
+        project="mistral-math-lora-test", 
         name=run_name,
         config=config,
-        tags=["unsloth", "optimized", "testing"] if config.get('testing_mode', False) else ["unsloth", "optimized"]
+        tags=["unsloth", "optimized", "testing", "local_data"] if config.get('use_local_data', False) else ["unsloth", "optimized"]
     )
 
     # Check for available hardware
@@ -123,12 +128,34 @@ def main():
     # Print trainable parameters info
     model.print_trainable_parameters()
 
-    
+    # Load dataset - either from local disk or from HuggingFace hub
     print(f"Loading only {config['test_sample_size']} examples")
-    dataset = load_dataset(
-        "open-web-math/open-web-math",
-        split=f"train[:{config['test_sample_size']}]"  # Load just a slice of the dataset
-    )
+    
+    if config.get('use_local_data', False):
+        # Load from local directory
+        local_data_path = "math-reasoning-in-language-models/data/pre-training/open-web-math"
+        print(f"Loading dataset from local path: {local_data_path}")
+        
+        try:
+            full_dataset = load_from_disk(local_data_path)
+            # Take a slice of the training set
+            if config.get('testing_mode', False):
+                dataset = full_dataset["train"].select(range(config['test_sample_size']))
+            else:
+                dataset = full_dataset["train"]
+        except Exception as e:
+            print(f"Error loading local dataset: {e}")
+            print("Falling back to loading from HuggingFace hub...")
+            dataset = load_dataset(
+                "open-web-math/open-web-math",
+                split=f"train[:{config['test_sample_size']}]"
+            )
+    else:
+        # Load from HuggingFace hub
+        dataset = load_dataset(
+            "open-web-math/open-web-math",
+            split=f"train[:{config['test_sample_size']}]"
+        )
     
     # Shuffle the dataset
     train_dataset = dataset.shuffle(seed=42)
@@ -172,12 +199,12 @@ def main():
             logging_steps=10,
             logging_dir="./logs",
             
-            # Trainin Parameter
+            # Training Parameters
             bf16=is_bfloat16_supported(),
             learning_rate=config["learning_rate"],
             embedding_learning_rate = config["embedding_learning_rate"],
             weight_decay=0.00,
-            warmup_ration=0.1,
+            warmup_ratio=0.1,
             max_steps=max_steps,
             optim = "adamw_8bit",
 
