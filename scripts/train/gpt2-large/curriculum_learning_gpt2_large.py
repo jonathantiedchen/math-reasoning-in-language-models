@@ -83,6 +83,9 @@ lora_config = LoraConfig(
 )
 
 for dataset_name, dataset_samples in dataset_dict.items():
+    # Implement the naming logic: use "final" if dataset is DMath, otherwise use dataset_name
+    model_name = "final" if dataset_name == "DMath" else dataset_name
+    
     # Initialize a new wandb run for each dataset
     run = wandb.init(
         project="gpt2-math-test", 
@@ -177,8 +180,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
     final_model_path = f"{dataset_output_dir}/final"
     trainer.save_model(final_model_path)
     
-    # Log model to wandb
-    final_artifact = wandb.Artifact(f"gpt2-math-lora-{dataset_name}", type="model")
+    # Log model to wandb using the model_name variable
+    final_artifact = wandb.Artifact(f"gpt2-math-lora-{model_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
     

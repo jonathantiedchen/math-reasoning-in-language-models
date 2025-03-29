@@ -455,13 +455,7 @@ def get_cl_learning_data():
             "path": os.path.join(data_root, "data", "curriculum_learning", "4_Dmath", "dmath_train.json"),
             "loader": load_dmath_data,
             "format": lambda item: format_with_solution(item, 'Solution')
-        }""",
-        {
-            "name": "AQuA",
-            "path": os.path.join(data_root, "data", "curriculum_learning", "5_AQuA", "AQuA_train.json"),
-            "loader": load_aqua_data,
-            "format": format_aqua
-        }"""
+        }
     ]
     
     # Process all datasets
