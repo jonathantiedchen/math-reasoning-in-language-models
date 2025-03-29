@@ -1,8 +1,13 @@
+# GPT2 Large Model Training with Curriculum Learning and LoRA
+# This script trains a GPT2 model using curriculum learning on multiple datasets with LoRA (Low-Rank Adaptation).
+# Adjust linkes and paths for Weights&Biases (wandb) and model saving as needed.
+
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling
 from datasets import Dataset, concatenate_datasets
 from trl import SFTTrainer, SFTConfig
+from peft import LoraConfig, get_peft_model
 import pandas as pd
 import os
 import sys
@@ -26,10 +31,13 @@ wandb_config = {
     "fp16": True,
     "gradient_accumulation_steps": 8,
     "lr_scheduler": "cosine",
-    "training_approach": "curriculum_learning",
+    "training_approach": "curriculum_learning_lora",
     "datasets": ["ASDiv", "ParaMAWPS", "SVAMP", "DMath"],
     "samples_per_dataset": 5,
-    "test_size": 0.1
+    "test_size": 0.1,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05
 }
 
 # Download the model only once before starting the dataset loops
@@ -63,23 +71,37 @@ def tokenize_datasets(dataset):
     return tokenized_dataset
 
 # Create output directory
-os.makedirs("./models/mathgpt2sft/", exist_ok=True)
+os.makedirs("./models/mathgpt2sft_lora/", exist_ok=True)
+
+# Define LoRA configuration
+lora_config = LoraConfig(
+    r=wandb_config["lora_r"],
+    lora_alpha=wandb_config["lora_alpha"],
+    lora_dropout=wandb_config["lora_dropout"],
+    bias="none",
+    task_type="CAUSAL_LM"
+)
 
 for dataset_name, dataset_samples in dataset_dict.items():
     # Initialize a new wandb run for each dataset
     run = wandb.init(
         project="gpt2-math-test", 
-        name=f"curriculum-learning-sft-{dataset_name}",
+        name=f"curriculum-learning-lora-{dataset_name}",
         config=wandb_config,
         reinit=True  # This ensures a new run is created each time
     )
     
-    print(f"Training on {dataset_name} dataset")
+    print(f"Training on {dataset_name} dataset with LoRA")
     
     # Create a fresh copy of the model for each dataset to ensure curriculum learning works properly
     # This avoids carrying over adaptations from previous datasets
     model = AutoModelForCausalLM.from_pretrained(artifact_dir)
     model.config.pad_token_id = model.config.eos_token_id
+    
+    # Apply LoRA adapter to the model
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()  # Print the number of trainable parameters
+    
     model.to(device)
     
     # Convert to pandas and then to Dataset
@@ -117,9 +139,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
     max_steps = wandb_config["max_steps"]
     
     # Create dataset-specific output directory
-    dataset_output_dir = f"./models/mathgpt2sft/{dataset_name}"
+    dataset_output_dir = f"./models/mathgpt2sft_lora/{dataset_name}"
     os.makedirs(dataset_output_dir, exist_ok=True)
-    
     
     trainer = SFTTrainer(
         model=model,
@@ -145,7 +166,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
             lr_scheduler_type=wandb_config["lr_scheduler"],
             report_to="wandb"
         ),
-        data_collator=data_collator
+        data_collator=data_collator,
+        peft_config=lora_config  # This is optional as we've already applied the config above
     )
     
     # Start training on this dataset
@@ -156,7 +178,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     trainer.save_model(final_model_path)
     
     # Log model to wandb
-    final_artifact = wandb.Artifact(f"gpt2-math-sft-{dataset_name}", type="model")
+    final_artifact = wandb.Artifact(f"gpt2-math-lora-{dataset_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
     
@@ -167,4 +189,4 @@ for dataset_name, dataset_samples in dataset_dict.items():
     # Finish this wandb run before starting the next one
     wandb.finish()
 
-print("Curriculum learning completed for all datasets.")
+print("Curriculum learning with LoRA completed for all datasets.")
