@@ -350,7 +350,7 @@ def load_dmath_data(file_path):
     print(f"Loaded {len(problems)} problems from DMath")
     return problems
 
-def load_aqua_data(file_path):
+"""def load_aqua_data(file_path):
     """Load and parse AQuA JSON data"""
     problems = []
     
@@ -372,7 +372,7 @@ def load_aqua_data(file_path):
             problems.append({"text": text})
     
     print(f"Loaded {len(problems)} problems from AQuA")
-    return problems
+    return problems"""
 
 
 def get_cl_learning_data():
@@ -382,7 +382,7 @@ def get_cl_learning_data():
         sys.path.insert(0, parent_dir)
     
     # Import data loading functions
-    from utils.data import load_asdiv_data, load_paramawps_data, load_svamp_data, load_aqua_data, load_dmath_data
+    from utils.data import load_asdiv_data, load_paramawps_data, load_svamp_data, load_dmath_data
     
     # Find data root directory
     data_root = None
@@ -410,7 +410,7 @@ def get_cl_learning_data():
         }
     
     # Special formatter for AQuA
-    def format_aqua(item):
+    """def format_aqua(item):
         text = item['text']
         
         # Extract question and options
@@ -428,7 +428,7 @@ def get_cl_learning_data():
         return {
             'question': question,
             'answer': f"Let me solve this step by step.\n{rationale}\nTherefore, the answer is {answer}."
-        }
+        }"""
     
     # Define dataset configurations
     datasets_config = [
@@ -455,13 +455,13 @@ def get_cl_learning_data():
             "path": os.path.join(data_root, "data", "curriculum_learning", "4_Dmath", "dmath_train.json"),
             "loader": load_dmath_data,
             "format": lambda item: format_with_solution(item, 'Solution')
-        },
+        }""",
         {
             "name": "AQuA",
             "path": os.path.join(data_root, "data", "curriculum_learning", "5_AQuA", "AQuA_train.json"),
             "loader": load_aqua_data,
             "format": format_aqua
-        }
+        }"""
     ]
     
     # Process all datasets
