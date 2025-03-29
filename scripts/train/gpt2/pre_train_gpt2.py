@@ -26,8 +26,8 @@ parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from utils.helper import get_device
-from utils.data import get_mixed_dataset
+from utils.helper import get_device, WandbModelLogger
+from utils.data import get_mixed_dataset_tokenized
 
 
 def main():
@@ -37,7 +37,9 @@ def main():
             "model_name": "gpt2",  # Options: "gpt2", "gpt2-medium", etc.
             "openwebmath_dataset": "open-web-math/open-web-math",
             "fineweb_dataset": "HuggingFaceFW/fineweb",
-            "fineweb_subset": "CC-MAIN-2024-10",
+            "fineweb_subset": "sample-10BT",
+            "openwebmath_path": "math-reasoning-in-language-models/data/pre-training/open-web-math",
+            "fineweb_path": "math-reasoning-in-language-models/data/pre-training/fineweb",
             "streaming": True,
             "shuffle_buffer": 5000,  # Increased buffer size for better mixing
             "max_length": 1024,
@@ -46,14 +48,14 @@ def main():
             "fineweb_ratio": 0.3,     # 30% from FineWeb
             "num_train_epochs": 6,    # Number of complete passes through the dataset
             "learning_rate": 5e-5,
-            "batch_size": 4,          # Samples per device in each forward pass
-            "gradient_accumulation_steps": 32,  # Number of forward passes before parameter update
+            "batch_size": 64,          # Samples per device in each forward pass
+            "gradient_accumulation_steps": 2,  # Number of forward passes before parameter update
             "num_workers": 4,         # Parallel data loading
             "prefetch_factor": 4      # Prefetch factor for data loading
     }
 
     # Set the output directories
-    output_dir = "./models/gpt2-math-fineweb-combined"
+    output_dir = "./models/gpt2-math-test"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
@@ -77,7 +79,7 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = model.config.eos_token_id
     
-    train_dataset = get_mixed_dataset(config, tokenizer)
+    train_dataset = get_mixed_dataset_tokenized(config, tokenizer)
     
     # Create data collator for language modeling
     data_collator = DataCollatorForLanguageModeling(
@@ -138,9 +140,6 @@ def main():
         save_steps=steps_per_epoch * 3,  # Save every ~3 epochs
         model_name_prefix="gpt2-math-fineweb-combined"
     )
-
-    # Clear cache periodically
-    memory_manager = MemoryManagementCallback(clear_cache_steps=100)
     
     # Initialize trainer
     trainer = Trainer(
@@ -148,7 +147,7 @@ def main():
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        callbacks=[wandb_logger, memory_manager]
+        callbacks=[wandb_logger]
     )
     
     # Enable cudnn benchmark for faster training

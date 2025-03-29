@@ -31,7 +31,7 @@ if parent_dir not in sys.path:
 
 from utils.helper import get_device
 
-from utils.data import get_mixed_dataset
+from utils.data import get_mixed_dataset_tokenized
 
 def main():
     # create wandb config to log parameters
@@ -48,9 +48,12 @@ def main():
         "lora_target_modules": ["c_attn", "c_proj", "c_fc"],
 
         # Dataset configuration
+        "use_local_data": True,
         "openwebmath_dataset": "open-web-math/open-web-math",
         "fineweb_dataset": "HuggingFaceFW/fineweb",
-        "fineweb_subset": "CC-MAIN-2024-10",
+        "openwebmath_path": "math-reasoning-in-language-models/data/pre-training/open-web-math",
+        "fineweb_path": "math-reasoning-in-language-models/data/pre-training/fineweb",
+        "fineweb_subset": "sample-10BT",
         "openwebmath_ratio": 0.7,  # 70% from OpenWebMath
         "fineweb_ratio": 0.3,     # 30% from FineWeb
         "streaming": True,
@@ -135,7 +138,7 @@ def main():
     model.print_trainable_parameters()
     
     # Load dataset in streaming mode
-    train_dataset = get_mixed_dataset(config, tokenizer)
+    train_dataset = get_mixed_dataset_tokenized(config, tokenizer)
     
     # Create data collator for language modeling
     data_collator = DataCollatorForLanguageModeling(
@@ -175,23 +178,12 @@ def main():
         disable_tqdm=False
     )
     
-    # Create custom callback to save model periodically
-    wandb_logger = WandbModelLogger(
-        output_dir=output_dir,
-        tokenizer=tokenizer,
-        save_steps=10000,
-        model_name_prefix="gpt2-large-lora-math"
-    )
-
-    # Memory management callback
-    
     # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         data_collator=data_collator,
-        train_dataset=train_dataset,
-        callbacks=[wandb_logger]
+        train_dataset=train_dataset
     )
     # Add CUDA memory configuration to avoid fragmentation
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
