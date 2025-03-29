@@ -68,6 +68,7 @@ os.makedirs("./models/mathgpt2sft/", exist_ok=True)
 for dataset_name, dataset_samples in dataset_dict.items():
     # Initialize a new wandb run for each dataset
     run = wandb.init(
+        entity = "master_thesis_math_lm",
         project="gpt2-math-test", 
         name=f"curriculum-learning-sft-{dataset_name}",
         config=wandb_config,

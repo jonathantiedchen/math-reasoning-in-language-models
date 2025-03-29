@@ -351,7 +351,7 @@ def load_dmath_data(file_path):
     return problems
 
 """def load_aqua_data(file_path):
-    """Load and parse AQuA JSON data"""
+    Load and parse AQuA JSON data
     problems = []
     
     with open(file_path, 'r') as f:
