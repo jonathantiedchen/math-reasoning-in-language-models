@@ -34,8 +34,8 @@ def main():
             "max_length": 1024,
             "max_steps": 10,
             "learning_rate": 5e-5,
-            "batch_size": 4,  # Increased from 8 to better utilize H100
-            "gradient_accumulation_steps": 32,  
+            "batch_size": 44,  # Increased from 8 to better utilize H100
+            "gradient_accumulation_steps": 2,  
             "num_workers": 4,  # Parallel data loading
             "prefetch_factor": 4  # Prefetch factor for data loading
     }

@@ -1,12 +1,17 @@
 """
-Train GPT-2 on OpenWebMath dataset using streaming to avoid downloading the full dataset.
+Train GPT-2 on a combination of OpenWebMath and FineWeb datasets using streaming.
+The combined dataset will have 70% samples from OpenWebMath and 30% from FineWeb.
+Total samples: 500,000
 Integrates Weights & Biases (wandb) for tracking.
+Uses epoch-based training to see samples multiple times.
 """
 
 import os
 import torch
 import wandb
 import sys
+import random
+from itertools import islice
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
@@ -14,13 +19,15 @@ from transformers import (
     Trainer, 
     DataCollatorForLanguageModeling
 )
-from datasets import load_dataset
+from datasets import load_dataset, Dataset, IterableDataset, interleave_datasets
+import math
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from utils.helper import get_device, WandbModelLogger, MemoryManagementCallback  # Import custom logger
+from utils.helper import get_device
+from utils.data import get_mixed_dataset
 
 
 def main():
@@ -28,28 +35,32 @@ def main():
     # create wandb config to log parameter
     config = {
             "model_name": "gpt2",  # Options: "gpt2", "gpt2-medium", etc.
-            "dataset": "open-web-math",
-            "domain_dataset": "fineweb",
+            "openwebmath_dataset": "open-web-math/open-web-math",
+            "fineweb_dataset": "HuggingFaceFW/fineweb",
+            "fineweb_subset": "CC-MAIN-2024-10",
             "streaming": True,
             "shuffle_buffer": 5000,  # Increased buffer size for better mixing
             "max_length": 1024,
-            "max_steps": 10,
+            "total_samples": 500000,  # Total number of samples to use
+            "openwebmath_ratio": 0.7,  # 70% from OpenWebMath
+            "fineweb_ratio": 0.3,     # 30% from FineWeb
+            "num_train_epochs": 6,    # Number of complete passes through the dataset
             "learning_rate": 5e-5,
-            "batch_size": 4,  # Increased from 8 to better utilize H100
-            "gradient_accumulation_steps": 32,  
-            "num_workers": 4,  # Parallel data loading
-            "prefetch_factor": 4  # Prefetch factor for data loading
+            "batch_size": 4,          # Samples per device in each forward pass
+            "gradient_accumulation_steps": 32,  # Number of forward passes before parameter update
+            "num_workers": 4,         # Parallel data loading
+            "prefetch_factor": 4      # Prefetch factor for data loading
     }
 
     # Set the output directories
-    output_dir = "./models/gpt2-math-streaming"
+    output_dir = "./models/gpt2-math-fineweb-combined"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
     # Initialize wandb
     run = wandb.init(
-        project="gpt2-math-large", 
-        name="gpt2-openwebmath-pre_training",
+        project="gpt2-math-fineweb", 
+        name="gpt2-combined-epoch_training",
         config=config
     )
 
@@ -63,85 +74,73 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(model_name)
     
     # Set padding token
-    tokenizer.pad_token = tokenizer.eos_token # End-of-Sequence (EOS) token as the padding token for the tokenizer.
-    model.config.pad_token_id = model.config.eos_token_id # model to recognize the EOS token ID as the padding token ID.
+    tokenizer.pad_token = tokenizer.eos_token
+    model.config.pad_token_id = model.config.eos_token_id
     
+    train_dataset = get_mixed_dataset(config, tokenizer)
     
-    # Load dataset in streaming mode
-    print("Loading OpenWebMath dataset in streaming mode...")
-    dataset = load_dataset("open-web-math/open-web-math", streaming=True)
-    
-    # Shuffle the dataset
-    shuffle_buffer_size = config['shuffle_buffer']
-    print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
-    train_dataset = dataset["train"].shuffle(buffer_size=shuffle_buffer_size)
-
-    # Define custom Tokenization function
-    def tokenize_function(examples, config=config):
-        return tokenizer(
-            examples["text"], # Processes the "text" field from each example in the batch
-            truncation=True, # Cuts off texts that are longer than the maximum allowed length
-            max_length=config['max_length'], #  Sets the maximum sequence length from the config
-            padding="max_length", # Pads all sequences to exactly the maximum length
-            return_tensors="pt" # Returns PyTorch tensors (pt) instead of lists
-        )
-    
-    # applies a transformation function to all examples in the dataset
-    train_dataset = train_dataset.map(
-        tokenize_function, # converts text into token IDs that the model can understand
-        batched=True, # enables batch processing of examples
-        batch_size=64,  # Process 16 examples at a time
-        remove_columns=["url", "date", "metadata", "text"] # after tokenization, the original columns are removed from the dataset
-    )
-    
-    # Create data collator for language modeling - forms batches from the training dataset
+    # Create data collator for language modeling
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False  # GPT-2 uses causal language modeling, not masked
     )
     
+    # Calculate steps per epoch and total training steps
+    # For streaming datasets, we need to estimate this based on our dataset size
+    total_batch_size = config["batch_size"] * config["gradient_accumulation_steps"]
+    steps_per_epoch = math.ceil(config["total_samples"] / total_batch_size)
+    total_training_steps = steps_per_epoch * config["num_train_epochs"]
+    
+    print(f"Estimated steps per epoch: {steps_per_epoch}")
+    print(f"Total training steps: {total_training_steps}")
+    
+    # Configure more frequent checkpoints and logging based on epochs
+    logging_steps = max(10, steps_per_epoch // 10)  # Log ~10 times per epoch
+    save_steps = steps_per_epoch // 2               # Save twice per epoch
+    
     training_args = TrainingArguments(
-        output_dir=output_dir,                          # Directory where model checkpoints and logs will be saved
-        overwrite_output_dir=True,                      # If output_dir exists, overwrite instead of erroring
-        per_device_train_batch_size=config["batch_size"], # Number of samples processed per GPU during training
-        gradient_accumulation_steps=config["gradient_accumulation_steps"], # Number of forward passes before updating parameters (effectively increases batch size)
-        save_steps=1000,                                # Save a checkpoint every 1000 steps
-        save_total_limit=2,                             # Keep only the 2 most recent checkpoints to save disk space
-        logging_steps=10,                               # Log metrics every 10 steps for more detailed monitoring
-        logging_dir="./logs",                           # Directory for storing training logs
+        output_dir=output_dir,
+        overwrite_output_dir=True,
+        per_device_train_batch_size=config["batch_size"],
+        gradient_accumulation_steps=config["gradient_accumulation_steps"],
+        save_steps=save_steps,
+        save_total_limit=3,                        # Keep only the 3 most recent checkpoints
+        logging_steps=logging_steps,
+        logging_dir="./logs",
+        
+        # Epoch-based training configuration
+        num_train_epochs=config["num_train_epochs"],  # Use epochs instead of max_steps
         
         # H100-specific optimizations
-        bf16=True,                                      # Use BF16 mixed precision - more efficient on H100 tensor cores than FP16
-        bf16_full_eval=True,                            # Use BF16 during evaluation as well for consistency
-        dataloader_num_workers=config["num_workers"],   # Number of CPU workers for data loading (parallel processing)
-        dataloader_pin_memory=True,                     # Pin memory in CPU to accelerate CPU to GPU transfer
-        learning_rate=config["learning_rate"],          # Initial learning rate for the optimizer
-        weight_decay=0.01,                              # L2 regularization factor to prevent overfitting
-        warmup_steps=200,                               # Gradually increase learning rate for first 200 steps for stability
-        max_steps=config["max_steps"],                  # Total number of training steps (overrides num_train_epochs)
-        evaluation_strategy="no",                       # Disable evaluation during training for streaming datasets
-        report_to="wandb",                              # Log metrics to Weights & Biases for visualization
-        lr_scheduler_type="cosine",                     # Options: linear, cosine, cosine_with_restarts, polynomial, constant, constant_with_warmup
-
+        bf16=True,
+        bf16_full_eval=True,
+        dataloader_num_workers=config["num_workers"],
+        dataloader_pin_memory=True,
+        learning_rate=config["learning_rate"],
+        weight_decay=0.01,
+        warmup_ratio=0.03,                     # 3% of total steps for warmup
+        evaluation_strategy="no",
+        report_to="wandb",
+        lr_scheduler_type="cosine",
         
         # Performance options
-        disable_tqdm=False,                             # Show progress bar for monitoring training progress
+        disable_tqdm=False,
         
         # Advanced optimization (PyTorch 2.0+)
-        torch_compile=True,                             # Enable PyTorch compiler for just-in-time optimization
+        torch_compile=True,
     )
     
-    # save model every 10000 steps
+    # Save model periodically 
+    # Adjust based on total steps to get similar frequency as original script
     wandb_logger = WandbModelLogger(
-            output_dir=output_dir,
-            tokenizer=tokenizer,
-            save_steps=10000,
-            model_name_prefix="gpt2-math-100000"
+        output_dir=output_dir,
+        tokenizer=tokenizer,
+        save_steps=steps_per_epoch * 3,  # Save every ~3 epochs
+        model_name_prefix="gpt2-math-fineweb-combined"
     )
 
-    #clear cache every 1000 steps
+    # Clear cache periodically
     memory_manager = MemoryManagementCallback(clear_cache_steps=100)
-
     
     # Initialize trainer
     trainer = Trainer(
@@ -149,39 +148,35 @@ def main():
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        callbacks=[wandb_logger]
+        callbacks=[wandb_logger, memory_manager]
     )
     
     # Enable cudnn benchmark for faster training
     torch.backends.cudnn.benchmark = True
     
     # Start training
-    print("Starting training with streaming dataset...")
+    print("Starting training with combined streaming datasets...")
+    print(f"Training for {config['num_train_epochs']} epochs")
     trainer.train()
     
-
-    ## Save model locally and in wandb
-    # Save the model locally
+    # Save model locally and in wandb
     model_save_path = f"{output_dir}/final"
     model.save_pretrained(model_save_path)
-    tokenizer.save_pretrained(model_save_path) # storing all the tokenizer's configuration and vocabulary files in the same directory as your mode
+    tokenizer.save_pretrained(model_save_path)
     print(f"Model saved to {model_save_path}")
     
     # Log model to wandb
-    artifact = wandb.Artifact("gpt2-math-model", type="model")
+    artifact = wandb.Artifact("gpt2-math-fineweb-model", type="model")
     artifact.add_dir(model_save_path)
     run.log_artifact(artifact)
     
-
-    ### ONLY Sample Generation
     # Sample generation to test the model
     print("\nGenerating sample output...")
     test_prompt = "The solution to the integral of x^2 is"
     input_ids = tokenizer(test_prompt, return_tensors="pt").input_ids.to(device)
     model = model.to(device)
     
-
-    with torch.no_grad(): # no_ disables gradient calculations - use model for inference
+    with torch.no_grad():
         outputs = model.generate(
             input_ids,
             max_length=100,
@@ -190,14 +185,14 @@ def main():
             pad_token_id=tokenizer.eos_token_id
         )
     
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True) # skip_special_tokens to ignore padding tokens in text generation
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     print(f"Prompt: {test_prompt}")
     print(f"Generated: {generated_text}")
     
     # Log the generated text to wandb
     wandb.log({"example_generation": wandb.Html(f"<p><strong>Prompt:</strong> {test_prompt}</p><p><strong>Generated:</strong> {generated_text}</p>")})
 
-     # Log training performance metrics
+    # Log training performance metrics
     gpu_stats = torch.cuda.memory_stats()
     wandb.log({
         "gpu_allocated_memory_gb": torch.cuda.memory_allocated() / 1e9,

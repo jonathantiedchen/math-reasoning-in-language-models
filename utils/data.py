@@ -2,11 +2,22 @@ import requests
 import os
 import json
 import logging
-from datasets import Dataset as HFDataset
+import random
+from datasets import load_dataset, interleave_datasets, concatenate_datasets, load_from_disk, Dataset as HFDataset
 import xml.etree.ElementTree as ET
 import sys
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
+    TrainingArguments, 
+    Trainer, 
+    DataCollatorForLanguageModeling
+)
 
 
+#################################################################
+################# GSM8K Download ##########################
+#################################################################
 # Function to download GSM8K dataset from GitHub
 def download_gsm8k():
     
@@ -53,7 +64,188 @@ def load_gsm8k_from_file():
     return train_data, test_data
 
 
+####################################################
+############# Pre-Training ##########################
+####################################################
+
+def get_mixed_dataset(config, tokenizer):
+    """
+    Creates a combined dataset with samples from OpenWebMath and FineWeb based on config parameters.
+    """
+    # Calculate number of samples from each dataset
+    openwebmath_samples = int(config['total_samples'] * config['openwebmath_ratio'])
+    fineweb_samples = config['total_samples'] - openwebmath_samples
+    
+    print(f"Loading datasets in streaming mode...")
+    print(f"OpenWebMath samples: {openwebmath_samples} ({config['openwebmath_ratio']*100}%)")
+    print(f"FineWeb samples: {fineweb_samples} ({config['fineweb_ratio']*100}%)")
+    
+    # Load OpenWebMath dataset
+    openwebmath_dataset = load_dataset(config['openwebmath_dataset'], streaming=True)["train"]
+    
+    # Load FineWeb dataset
+    fineweb_dataset = load_dataset(
+        config['fineweb_dataset'],
+        name=config['fineweb_subset'],
+        split="train",
+        streaming=True
+    )
+    
+    # Define tokenization function (shared for both datasets)
+    def tokenize_function(examples):
+        return tokenizer(
+            examples["text"],
+            truncation=True,
+            max_length=config['max_length'],
+            padding="max_length",
+            return_tensors="pt"
+        )
+    
+    # Process OpenWebMath dataset
+    # We need to ensure the columns match after processing
+    openwebmath_processed = openwebmath_dataset.map(
+        tokenize_function,
+        batched=True,
+        batch_size=64,
+        remove_columns=openwebmath_dataset.column_names
+    )
+    
+    # Process FineWeb dataset
+    # Note: Check the actual column names in your FineWeb dataset and adjust accordingly
+    fineweb_processed = fineweb_dataset.map(
+        tokenize_function,
+        batched=True,
+        batch_size=64,
+        remove_columns=fineweb_dataset.column_names  # Remove all original columns
+    )
+    
+    # Create subsets with the desired number of samples
+    # For IterableDatasets, we'll take the first N samples
+    openwebmath_subset = openwebmath_processed.take(openwebmath_samples)
+    fineweb_subset = fineweb_processed.take(fineweb_samples)
+    
+    # Check that the datasets have matching column formats
+    print(f"OpenWebMath columns: {openwebmath_subset.column_names}")
+    print(f"FineWeb columns: {fineweb_subset.column_names}")
+    
+    # Combine the datasets using interleave_datasets
+    # This function allows us to specify the mixing rates
+    combined_dataset = interleave_datasets(
+        [openwebmath_subset, fineweb_subset],
+        probabilities=[config['openwebmath_ratio'], config['fineweb_ratio']],
+        seed=42,
+        stopping_strategy="first_exhausted"
+    )
+    
+    # Shuffle the combined dataset
+    shuffle_buffer_size = config['shuffle_buffer']
+    print(f"Setting up streaming pipeline with shuffle buffer size: {shuffle_buffer_size}")
+    train_dataset = combined_dataset.shuffle(buffer_size=shuffle_buffer_size, seed=42)
+    
+    return train_dataset
+
+def get_local_data(config):
+    """
+    Load and mix OpenWebMath and FineWeb datasets from local disk or HuggingFace hub.
+    
+    Args:
+        config: Dictionary containing configuration parameters:
+            - test_sample_size: Number of samples to use if in testing mode
+            - use_local_data: Whether to use local data or download from HF
+            - testing_mode: Whether we're in testing mode (using fewer samples)
+            - openwebmath_ratio: Ratio of samples from OpenWebMath (default 0.7)
+            - fineweb_ratio: Ratio of samples from FineWeb (default 0.3)
+            - total_samples: Total number of samples to use from both datasets combined
+    
+    Returns:
+        A dataset with mixed samples from both sources
+    """
+    total_samples = config.get('total_samples', 500000)
+    openwebmath_ratio = config.get('openwebmath_ratio', 0.7)
+    fineweb_ratio = config.get('fineweb_ratio', 0.3)
+    
+    # Calculate samples for each dataset
+    openwebmath_samples = int(total_samples * openwebmath_ratio)
+    fineweb_samples = total_samples - openwebmath_samples
+    
+    print(f"Loading mixed dataset with:")
+    print(f" - OpenWebMath: {openwebmath_samples} samples ({openwebmath_ratio*100:.1f}%)")
+    print(f" - FineWeb: {fineweb_samples} samples ({fineweb_ratio*100:.1f}%)")
+    
+    # Testing mode uses fewer samples
+    if config.get('testing_mode', False):
+        print(f"Testing mode enabled, only using {config['test_sample_size']} samples total")
+        test_ratio = config['test_sample_size'] / total_samples
+        openwebmath_samples = int(openwebmath_samples * test_ratio)
+        fineweb_samples = int(fineweb_samples * test_ratio)
+        
+    # Load OpenWebMath dataset
+    if config.get('use_local_data', False):
+        # Load OpenWebMath from local directory
+        openwebmath_path = "math-reasoning-in-language-models/data/pre-training/open-web-math"
+        print(f"Loading OpenWebMath from local path: {openwebmath_path}")
+        try:
+            full_openwebmath = load_from_disk(openwebmath_path)
+            openwebmath_dataset = full_openwebmath["train"].select(range(openwebmath_samples))
+        except Exception as e:
+            print(f"Error loading local OpenWebMath dataset: {e}")
+            print("Falling back to loading from HuggingFace hub...")
+            openwebmath_dataset = load_dataset(
+                "open-web-math/open-web-math",
+                split=f"train[:{openwebmath_samples}]"
+            )
+        
+        # Load FineWeb from local directory
+        fineweb_path = "math-reasoning-in-language-models/data/pre-training/fineweb"
+        print(f"Loading FineWeb from local path: {fineweb_path}")
+        try:
+            full_fineweb = load_from_disk(fineweb_path)
+            fineweb_dataset = full_fineweb["train"].select(range(fineweb_samples))
+        except Exception as e:
+            print(f"Error loading local FineWeb dataset: {e}")
+            print("Falling back to loading from HuggingFace hub...")
+            fineweb_dataset = load_dataset(
+                "HuggingFaceFW/fineweb",
+                name=config.get('fineweb_subset', 'CC-MAIN-2024-10'),
+                split=f"train[:{fineweb_samples}]"
+            )
+    else:
+        # Load both datasets from HuggingFace hub
+        print("Loading datasets from HuggingFace hub")
+        openwebmath_dataset = load_dataset(
+            "open-web-math/open-web-math",
+            split=f"train[:{openwebmath_samples}]"
+        )
+        
+        fineweb_dataset = load_dataset(
+            "HuggingFaceFW/fineweb",
+            name=config.get('fineweb_subset', 'CC-MAIN-2024-10'),
+            split=f"train[:{fineweb_samples}]"
+        )
+    
+    # Ensure datasets have compatible column formats
+    print(f"OpenWebMath columns: {openwebmath_dataset.column_names}")
+    print(f"FineWeb columns: {fineweb_dataset.column_names}")
+    
+    # Make sure both datasets have a 'text' column
+    # Adapt as needed based on actual dataset structure
+    if 'text' not in fineweb_dataset.column_names and 'content' in fineweb_dataset.column_names:
+        fineweb_dataset = fineweb_dataset.rename_column('content', 'text')
+    
+    # Combine datasets using interleave_datasets for proper mixing
+    combined_dataset = interleave_datasets(
+        [openwebmath_dataset, fineweb_dataset],
+        probabilities=[openwebmath_ratio, fineweb_ratio],
+        seed=42,
+        stopping_strategy="first_exhausted"
+    )
+    
+    print(f"Created interleaved dataset with appropriate mixing ratios")
+    return combined_dataset
+
+#######################################
 ######## CURRICULUM LEARNING #############
+#######################################
 def prepare_datasets_qa(example):
     # Simple Question-Answer format
     example['prompt'] = f"###Question: {example['question']}\n###Answer: {example['answer']}"
