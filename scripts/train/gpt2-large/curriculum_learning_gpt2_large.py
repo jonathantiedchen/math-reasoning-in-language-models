@@ -12,7 +12,7 @@ import pandas as pd
 import os
 import sys
 
-parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../..'))
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
@@ -88,6 +88,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     
     # Initialize a new wandb run for each dataset
     run = wandb.init(
+        entity = "master_thesis_math_lm",
         project="gpt2-math-test", 
         name=f"curriculum-learning-lora-{dataset_name}",
         config=wandb_config,

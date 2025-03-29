@@ -1,5 +1,5 @@
 """
-Train Mistral 7B with curriculum learning approach using Weights & Biases pretrained model and SFTTrainer from Unsoth.
+Train Mistral 7B with curriculum learning approach using Weights & Biases pretrained model and SFTTrainer from Unsloth.
 Replace the pretrained_artifact_name value with your actual W&B artifact reference
 """
 
@@ -56,7 +56,7 @@ wandb_config = {
 # Initialize wandb run for tracking overall process
 run = wandb.init(
     entity="master_thesis_math_lm",
-    project="mistral-math-lora-test", 
+    project="mistral-math-test", 
     name="mistral-7b-curriculum-learning-sft",
     config=wandb_config
 )
@@ -104,6 +104,9 @@ wandb.finish()
 
 # Iterate through datasets in curriculum order
 for dataset_name, dataset_samples in dataset_dict.items():
+    # Implement the naming logic: use "final" if dataset is DMath, otherwise use dataset_name
+    model_name = "final" if dataset_name == "DMath" else dataset_name
+    
     print(f"\n\n{'='*50}")
     print(f"Training on {dataset_name} dataset")
     print(f"{'='*50}")
@@ -214,14 +217,13 @@ for dataset_name, dataset_samples in dataset_dict.items():
     print(f"Starting SFT training for {dataset_name}...")
     trainer.train()
     
-    # Save model for this dataset
-    model_name = "final" if dataset_name == "DMath" else dataset_name  # Changed AQuA to DMath as final dataset
+    # Save model for this dataset - using dataset_name for directory but model_name for final path
     model_save_path = f"{output_dir}/{model_name}"
     trainer.model.save_pretrained(model_save_path)
     tokenizer.save_pretrained(model_save_path)
     print(f"Model for {dataset_name} saved to {model_save_path}")
     
-    # Log model to wandb
+    # Log model to wandb - using model_name for the artifact naming
     artifact = wandb.Artifact(f"mistral-math-sft-{model_name}", type="model")
     artifact.add_dir(model_save_path)
     dataset_run.log_artifact(artifact)
