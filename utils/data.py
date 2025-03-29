@@ -83,13 +83,21 @@ def get_mixed_dataset(config, tokenizer):
     # Load OpenWebMath dataset
     openwebmath_dataset = load_dataset(config['openwebmath_dataset'], streaming=True)["train"]
     
-    # Load FineWeb dataset
+    # Load and filter FineWeb dataset by token count
+    print(f"Filtering FineWeb samples to include only those with token_count <= {config['max_length']}")
     fineweb_dataset = load_dataset(
         config['fineweb_dataset'],
         name=config['fineweb_subset'],
         split="train",
         streaming=True
     )
+    
+    # Filter based on token_count column
+    def token_count_filter(example):
+        # The token_count column provides the exact token count
+        return example["token_count"] <= config['max_length']
+    
+    fineweb_filtered = fineweb_dataset.filter(token_count_filter)
     
     # Define tokenization function (shared for both datasets)
     def tokenize_function(examples):
