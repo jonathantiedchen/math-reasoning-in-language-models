@@ -90,7 +90,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     run = wandb.init(
         entity = "master_thesis_math_lm",
         project="gpt2-math-test", 
-        name=f"curriculum-learning-lora-{dataset_name}",
+        name=f"gpt2-large-curriculum-learning-{dataset_name}",
         config=wandb_config,
         reinit=True  # This ensures a new run is created each time
     )
@@ -182,7 +182,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     trainer.save_model(final_model_path)
     
     # Log model to wandb using the model_name variable
-    final_artifact = wandb.Artifact(f"gpt2-math-lora-{model_name}", type="model")
+    final_artifact = wandb.Artifact(f"gpt2-large-curriculum-learning-{model_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
     

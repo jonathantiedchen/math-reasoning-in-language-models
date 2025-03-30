@@ -115,7 +115,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     dataset_run = wandb.init(
         entity="master_thesis_math_lm",
         project="mistral-math-lora-test",
-        name=f"mistral-7b-{dataset_name}-sft",
+        name=f"mistral-7b-curriculum_learning_{dataset_name}",
         config=wandb_config,
         reinit=True
     )
@@ -275,7 +275,7 @@ tokenizer.save_pretrained(final_model_path)
 main_run = wandb.init(
     entity="master_thesis_math_lm",
     project="mistral-math-lora-test",
-    name="mistral-7b-curriculum-learning-sft-final",
+    name="mistral-7b-curriculum-learning-final",
     id=main_run_id,
     resume="allow"
 )
