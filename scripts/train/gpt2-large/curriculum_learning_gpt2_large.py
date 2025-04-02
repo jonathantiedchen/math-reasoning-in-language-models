@@ -24,7 +24,7 @@ wandb_config = {
     "model_name": "gpt2",
     "learning_rate": 2e-5,
     "batch_size": 8,
-    "max_steps": 5,
+    "max_steps": 5000,
     "warmup_steps": 100,
     "save_steps": 1000,
     "eval_steps": 100,
@@ -42,15 +42,15 @@ wandb_config = {
 
 # Download the model only once before starting the dataset loops
 api = wandb.Api()
-artifact = api.artifact('master_thesis_math_lm/gpt2-math/gpt2-math-model:v1', type='model')
+artifact = api.artifact('master_thesis_math_lm/gpt2-large-math-final/gpt2-large-lora-math-adapter:v0', type='model')
 artifact_dir = artifact.download()
 
 # Load the tokenizer and model outside the loop
 tokenizer = AutoTokenizer.from_pretrained(artifact_dir)
-original_model = AutoModelForCausalLM.from_pretrained(artifact_dir)
+model = AutoModelForCausalLM.from_pretrained(artifact_dir)
 
 tokenizer.pad_token = tokenizer.eos_token
-original_model.config.pad_token_id = original_model.config.eos_token_id
+model.config.pad_token_id = model.config.eos_token_id
 
 # Get device
 device = get_device()
@@ -89,18 +89,13 @@ for dataset_name, dataset_samples in dataset_dict.items():
     # Initialize a new wandb run for each dataset
     run = wandb.init(
         entity = "master_thesis_math_lm",
-        project="gpt2-math-test", 
+        project="gpt2-large-cl-final", 
         name=f"gpt2-large-curriculum-learning-{dataset_name}",
         config=wandb_config,
         reinit=True  # This ensures a new run is created each time
     )
     
     print(f"Training on {dataset_name} dataset with LoRA")
-    
-    # Create a fresh copy of the model for each dataset to ensure curriculum learning works properly
-    # This avoids carrying over adaptations from previous datasets
-    model = AutoModelForCausalLM.from_pretrained(artifact_dir)
-    model.config.pad_token_id = model.config.eos_token_id
     
     # Apply LoRA adapter to the model
     model = get_peft_model(model, lora_config)
@@ -154,6 +149,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
             output_dir=dataset_output_dir,
             gradient_accumulation_steps=wandb_config["gradient_accumulation_steps"],
             do_eval=True,
+            evaluation_strategy="steps",
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=batch_size,
             log_level="info",
@@ -185,10 +181,6 @@ for dataset_name, dataset_samples in dataset_dict.items():
     final_artifact = wandb.Artifact(f"gpt2-large-curriculum-learning-{model_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
-    
-    # Clean up GPU memory
-    del model
-    torch.cuda.empty_cache()
     
     # Finish this wandb run before starting the next one
     wandb.finish()

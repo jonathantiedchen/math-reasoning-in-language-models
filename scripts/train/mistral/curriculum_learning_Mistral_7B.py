@@ -29,8 +29,8 @@ wandb_config = {
     "model_name": "mistralai/Mistral-7B-v0.1",  # This will be replaced with W&B artifact
     "learning_rate": 2e-4,
     "batch_size": 2,                          # Changed to match your requested config
-    "max_steps": 5,
-    "num_train_epochs": 7,                    # Added per your request
+    "max_steps": 5000,
+    #"num_train_epochs": 7,                    # Added per your request
     "warmup_steps": 5,                        # Updated per your request
     "save_steps": 100,
     "eval_steps": 100,
@@ -42,8 +42,8 @@ wandb_config = {
     "test_size": 0.1,
     # LoRA specific parameters
     "lora_r": 16,
-    "lora_alpha": 32,
-    "lora_dropout": 0.05,
+    "lora_alpha": 16,
+    "lora_dropout": 0,
     "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     # Model specific parameters
     "max_seq_length": 2048,
@@ -53,16 +53,6 @@ wandb_config = {
     "seed": 3407,                             # Changed per your request
 }
 
-# Initialize wandb run for tracking overall process
-run = wandb.init(
-    entity="master_thesis_math_lm",
-    project="mistral-math-test", 
-    name="mistral-7b-curriculum-learning-sft",
-    config=wandb_config
-)
-
-# Store the main run ID
-main_run_id = run.id
 
 # Check for available hardware
 device = get_device()
@@ -70,11 +60,12 @@ print(f"Using device: {device}")
 
 # Download pretrained model from Weights & Biases
 # You'll need to specify the actual artifact name and version
-pretrained_artifact_name = "master_thesis_math_lm/mistral-math-lora-test/your-pretrained-model:v0"
+pretrained_artifact_name = "master_thesis_math_lm/mistral-math-final/mistral-7b-math-unsloth-model:v0"
 print(f"Downloading pretrained model from W&B: {pretrained_artifact_name}")
 
+api = wandb.Api()
 # Use wandb.use_artifact to download the model
-model_artifact = run.use_artifact(pretrained_artifact_name)
+model_artifact = api.artifact(pretrained_artifact_name, type="model")
 model_dir = model_artifact.download()
 
 # Load the model with Unsloth optimizations from the downloaded artifact
@@ -84,6 +75,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     dtype=torch.bfloat16 if is_bfloat16_supported() else torch.float16,
     load_in_4bit=True
 )
+
+
 
 # Set padding token if needed
 if tokenizer.pad_token is None:
@@ -99,43 +92,29 @@ dataset_dict = get_cl_learning_data()
 # Create the TrainingSpeedCallback to track training performance
 training_speed_tracker = TrainingSpeedCallback()
 
-# Finish the main run before starting dataset-specific runs
-wandb.finish()
-
 # Iterate through datasets in curriculum order
 for dataset_name, dataset_samples in dataset_dict.items():
     # Implement the naming logic: use "final" if dataset is DMath, otherwise use dataset_name
-    model_name = "final" if dataset_name == "DMath" else dataset_name
+    dataset_name = "final" if dataset_name == "DMath" else dataset_name
     
     print(f"\n\n{'='*50}")
     print(f"Training on {dataset_name} dataset")
     print(f"{'='*50}")
     
     # Initialize a new wandb run for each dataset
-    dataset_run = wandb.init(
+    # Initialize wandb run for tracking overall process
+    run = wandb.init(
         entity="master_thesis_math_lm",
-        project="mistral-math-lora-test",
-        name=f"mistral-7b-curriculum_learning_{dataset_name}",
+        project="mistral-cl-final", 
+        name=f'mistral-7b-cl-{dataset_name}',
         config=wandb_config,
         reinit=True
     )
     
-    # For each dataset, we need to start with a fresh LoRA configuration
-    # Apply LoRA using Unsloth's adapter
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=wandb_config['lora_r'],
-        lora_alpha=wandb_config['lora_alpha'],
-        lora_dropout=wandb_config['lora_dropout'],
-        target_modules=wandb_config['target_modules'],
-        bias="none"
-    )
     
     # Print trainable parameters info
     model.print_trainable_parameters()
-    
-    # No need to limit dataset samples since AQuA is excluded
-    
+        
     # Convert to pandas and then to Dataset
     df = pd.DataFrame(dataset_samples)
     dataset = Dataset.from_pandas(df)
@@ -163,6 +142,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
+        eval_dataset = test_dataset,
+        
         dataset_text_field="prompt",  # Field containing the text in your dataset
         max_seq_length=wandb_config["max_seq_length"],
         dataset_num_proc=wandb_config["num_workers"],
@@ -173,6 +154,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
             per_device_train_batch_size=wandb_config["batch_size"],
             per_device_eval_batch_size=wandb_config["batch_size"],
             gradient_accumulation_steps=wandb_config["gradient_accumulation_steps"],
+            do_eval=True,
             save_steps=wandb_config["save_steps"],
             save_total_limit=2,
             logging_steps=50,
@@ -188,8 +170,8 @@ for dataset_name, dataset_samples in dataset_dict.items():
             warmup_steps=wandb_config["warmup_steps"],
             
             # Use either max_steps or num_train_epochs
-            # max_steps=wandb_config["max_steps"],
-            num_train_epochs=wandb_config["num_train_epochs"],
+            max_steps=wandb_config["max_steps"],
+            #num_train_epochs=wandb_config["num_train_epochs"],
             
             # Evaluation settings
             evaluation_strategy="steps",
@@ -218,39 +200,16 @@ for dataset_name, dataset_samples in dataset_dict.items():
     trainer.train()
     
     # Save model for this dataset - using dataset_name for directory but model_name for final path
-    model_save_path = f"{output_dir}/{model_name}"
-    trainer.model.save_pretrained(model_save_path)
+    model_save_path = f"{output_dir}/{dataset_name}"
+    #trainer.model.save_pretrained(model_save_path)
     tokenizer.save_pretrained(model_save_path)
+    trainer.save_model(model_save_path)
     print(f"Model for {dataset_name} saved to {model_save_path}")
     
     # Log model to wandb - using model_name for the artifact naming
-    artifact = wandb.Artifact(f"mistral-math-sft-{model_name}", type="model")
+    artifact = wandb.Artifact(f"mistral-math-sft-{dataset_name}", type="model")
     artifact.add_dir(model_save_path)
-    dataset_run.log_artifact(artifact)
-    
-    # Sample generation to test the model
-    print(f"\nGenerating sample output for {dataset_name}...")
-    
-    # Get a sample question from the test dataset
-    if len(test_dataset) > 0:
-        test_sample = test_dataset[0]["prompt"]
-        input_ids = tokenizer(test_sample, return_tensors="pt").input_ids.to(device)
-        
-        with torch.no_grad():
-            outputs = model.generate(
-                input_ids,
-                max_length=512,
-                temperature=0.7,
-                num_return_sequences=1,
-                pad_token_id=tokenizer.eos_token_id
-            )
-        
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print(f"Prompt: {test_sample}")
-        print(f"Generated: {generated_text}")
-        
-        # Log the generated text to wandb
-        wandb.log({"example_generation": wandb.Html(f"<p><strong>Prompt:</strong> {test_sample}</p><p><strong>Generated:</strong> {generated_text}</p>")})
+    run.log_artifact(artifact)
     
     # Log training performance metrics
     if torch.cuda.is_available():
@@ -263,27 +222,3 @@ for dataset_name, dataset_samples in dataset_dict.items():
     
     # Finish the dataset-specific wandb run
     wandb.finish()
-
-# Log the final model (after all curriculum steps)
-print("\nCurriculum learning complete!")
-final_model_path = f"./models/mistral-7b-curriculum-sft/final"
-os.makedirs(final_model_path, exist_ok=True)
-model.save_pretrained(final_model_path)
-tokenizer.save_pretrained(final_model_path)
-
-# Reinitialize the main wandb run to log the final model
-main_run = wandb.init(
-    entity="master_thesis_math_lm",
-    project="mistral-math-lora-test",
-    name="mistral-7b-curriculum-learning-final",
-    id=main_run_id,
-    resume="allow"
-)
-
-# Log final model to main wandb run
-final_artifact = wandb.Artifact("mistral-math-curriculum-final", type="model")
-final_artifact.add_dir(final_model_path)
-main_run.log_artifact(final_artifact)
-
-# Finish the main wandb run
-wandb.finish()
