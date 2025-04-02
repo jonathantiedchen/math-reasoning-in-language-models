@@ -45,7 +45,8 @@ def main():
             "dataset": "open-web-math",
             "streaming": False,  # We need to use non-streaming but will optimize memory
             "max_length": 1024,
-            "max_steps": 5000,
+            "total_samples": 20000,
+            "num_train_epochs": 6,    # Number of complete passes through the dataset
             "learning_rate": 5e-5,    # Unsloth can handle slightly higher learning rates
             "embedding_learning_rate": 5e-6, 
             "batch_size": 4,          # Unsloth is more memory efficient
@@ -53,6 +54,18 @@ def main():
             "num_workers": 8,         # Parallel data loading
             "prefetch_factor": 4,     # Prefetch factor for data loading
 
+            # Dataset configuration
+            "use_local_data": True,
+            "openwebmath_dataset": "open-web-math/open-web-math",
+            "fineweb_dataset": "HuggingFaceFW/fineweb",
+            "openwebmath_path": "math-reasoning-in-language-models/data/pre-training/open-web-math",
+            "fineweb_path": "math-reasoning-in-language-models/data/pre-training/fineweb",
+            "fineweb_subset": "sample-10BT",
+            "openwebmath_ratio": 0.7,  # 70% from OpenWebMath
+            "fineweb_ratio": 0.3,     # 30% from FineWeb
+            "streaming": True,
+            "shuffle_buffer": 1000,      # Buffer size for better mixing
+            "max_length": 1024,
             # LoRA specific parameters
             "lora_r": 16,             # LoRA attention dimension
             "lora_alpha": 16,         # LoRA alpha parameter
@@ -147,8 +160,6 @@ def main():
         batched=True
     )
     
-    # For testing: set a much smaller number of steps
-    max_steps = 100 if config.get('testing_mode', False) else config["max_steps"]
     
     # Create the TrainingSpeedCallback to track training performance
     training_speed_tracker = TrainingSpeedCallback()
@@ -177,7 +188,7 @@ def main():
             embedding_learning_rate = config["embedding_learning_rate"],
             weight_decay=0.00,
             warmup_ratio=0.1,
-            max_steps=max_steps,
+            num_train_epochs=config["num_train_epochs"],
             optim = "adamw_8bit",
 
             

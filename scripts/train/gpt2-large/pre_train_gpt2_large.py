@@ -45,7 +45,7 @@ def main():
         "lora_r": 16,                # Rank of LoRA matrices
         "lora_alpha": 16,            # Alpha parameter for LoRA scaling
         "lora_dropout": 0.,        # Dropout probability for LoRA layers
-        "lora_target_modules": ["c_attn", "c_proj", "c_fc"],
+        "lora_target_modules": ["c_attn", "c_proj", "c_fc","lm_head"],
 
         # Dataset configuration
         "use_local_data": True,
@@ -82,8 +82,8 @@ def main():
     
     # Initialize wandb
     run = wandb.init(
-        project="gpt2-large-math", 
-        name="gpt2-large-lora-openwebmath",
+        project="gpt2-large-math-final", 
+        name="gpt2-large-pre-training",
         config=config
     )
 
