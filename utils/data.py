@@ -422,10 +422,9 @@ def load_paramawps_data(file_path):
     problems = []
     for item in data:
         question = item.get("original_text", "").strip()
-        equation = item.get("equation", "").strip()
         answer = str(item.get("ans", "")).strip()  # Changed from "answer" to "ans"
         
-        text = f"Question: {question}\nEquation: {equation}\nAnswer: {answer}"
+        text = f"Question: {question}\nAnswer: {answer}"
         problems.append({"text": text})
     
     print(f"Loaded {len(problems)} problems from ParaMAWPS")
@@ -440,12 +439,11 @@ def load_svamp_data(file_path):
     for item in data:
         question = item.get("Body", "") + " " + item.get("Question", "")
         question = question.strip()
-        equation = str(item.get("Equation", "")).strip()
         answer = str(item.get("Answer", "")).strip()
         
         # Include equation if available
         if equation:
-            text = f"Question: {question}\nEquation: {equation}\nAnswer: {answer}"
+            text = f"Question: {question}\nAnswer: {answer}"
         else:
             text = f"Question: {question}\nAnswer: {answer}"
             

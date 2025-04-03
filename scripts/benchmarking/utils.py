@@ -1,3 +1,4 @@
+# code used from repository: https://github.com/tianlwang/eval_gsm8k/tree/main?tab=readme-ov-file#
 import re
 from transformers import StoppingCriteria
 
