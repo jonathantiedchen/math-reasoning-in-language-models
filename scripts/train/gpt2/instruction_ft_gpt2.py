@@ -18,7 +18,7 @@ from collections import Counter
 wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-math-instruct",
-    name="instruction-learning-new",
+    name="GPT-2-small-IL-final",
     config={
         "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",

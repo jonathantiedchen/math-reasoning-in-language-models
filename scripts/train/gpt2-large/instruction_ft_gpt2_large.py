@@ -16,8 +16,8 @@ from trl import SFTTrainer, SFTConfig  # Import SFTTrainer and SFTConfig from tr
 # Initialize Weights & Biases with more configuration options
 wandb.init(
     entity="master_thesis_math_lm",
-    project="gpt2-large-math-instruct",
-    name="instruction-learning-gpt2-large",
+    project="gpt2-math-instruct",
+    name="GPT-2-large-IL-final",
     config={
         "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-ASDiv:v0",
         "dataset": "TIGER-Lab/MathInstruct",
