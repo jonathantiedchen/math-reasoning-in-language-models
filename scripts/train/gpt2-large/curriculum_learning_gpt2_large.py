@@ -32,7 +32,7 @@ wandb_config = {
     "gradient_accumulation_steps": 8,
     "lr_scheduler": "cosine",
     "training_approach": "curriculum_learning_lora",
-    "datasets": ["ASDiv", "ParaMAWPS", "SVAMP", "DMath"],
+    "datasets": ["ASDiv", "ParaMAWPS", "DMath"],
     "samples_per_dataset": 5,
     "test_size": 0.1,
     "lora_r": 16,

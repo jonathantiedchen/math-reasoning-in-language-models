@@ -37,7 +37,7 @@ wandb_config = {
     "gradient_accumulation_steps": 4,         # Changed to match your requested config
     "lr_scheduler": "linear",                 # Changed to linear per your request
     "training_approach": "curriculum_learning",
-    "datasets": ["ASDiv", "ParaMAWPS", "SVAMP", "DMath"],  # Removed AQuA
+    "datasets": ["ASDiv", "ParaMAWPS", "DMath"],
     "samples_per_dataset": 5,
     "test_size": 0.1,
     # LoRA specific parameters
