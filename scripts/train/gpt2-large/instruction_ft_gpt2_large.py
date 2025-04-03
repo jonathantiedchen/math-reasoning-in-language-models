@@ -6,21 +6,20 @@ from datasets import load_dataset
 from transformers import (
     GPT2LMHeadModel,
     GPT2Tokenizer,
-    Trainer,
-    TrainingArguments,
-    DataCollatorForLanguageModeling,
-    integrations
+    DataCollatorForLanguageModeling
 )
 from transformers.integrations import WandbCallback
 from collections import Counter
+from peft import LoraConfig, get_peft_model
+from trl import SFTTrainer, SFTConfig  # Import SFTTrainer and SFTConfig from trl
 
 # Initialize Weights & Biases with more configuration options
 wandb.init(
     entity="master_thesis_math_lm",
-    project="gpt2-math-instruct",
-    name="instruction-learning-new",
+    project="gpt2-large-math-instruct",
+    name="instruction-learning-gpt2-large",
     config={
-        "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0",
+        "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-ASDiv:v0",
         "dataset": "TIGER-Lab/MathInstruct",
         "batch_size": 8,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
@@ -28,12 +27,15 @@ wandb.init(
         "epochs": 1,
         "max_steps": 20000,
         "num_workers": 8,
-        "test_size": 0.1  # Added test_size parameter for train/val split
+        "test_size": 0.1,  # Added test_size parameter for train/val split
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.05
     }
 )
 
 # Load pre-trained model and tokenizer from Weights & Biases
-model_name = "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0"
+model_name = "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-ASDiv:v0"
 # First, download the model from W&B
 wandb_artifact = wandb.use_artifact(model_name)
 model_dir = wandb_artifact.download()
@@ -45,6 +47,15 @@ model = GPT2LMHeadModel.from_pretrained(model_dir)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = model.config.eos_token_id
+
+# Define LoRA configuration
+lora_config = LoraConfig(
+    r=wandb.config["lora_r"],
+    lora_alpha=wandb.config["lora_alpha"],
+    lora_dropout=wandb.config["lora_dropout"],
+    bias="none",
+    task_type="CAUSAL_LM"
+)
 
 # Load the TIGER-Lab/MathInstruct dataset - just the train split
 dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
@@ -147,15 +158,19 @@ data_collator = DataCollatorForLanguageModeling(
     mlm=False  # We're not doing masked language modeling
 )
 
-# Set up training arguments with memory optimizations and evaluation
-training_args = TrainingArguments(
-    output_dir="./models/mathgpt2instruct",
+# Create output directory
+output_dir = "./models/mathgpt2instruct_lora"
+os.makedirs(output_dir, exist_ok=True)
+
+# Setup SFTConfig instead of TrainingArguments
+training_args = SFTConfig(
+    output_dir=output_dir,
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
     per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,  # Added eval batch size
-    gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=4,
     save_steps=1000,
     save_total_limit=2,
     max_steps=20000,
@@ -163,25 +178,27 @@ training_args = TrainingArguments(
     learning_rate=5e-5,
     weight_decay=0.01,
     warmup_steps=100,
-    evaluation_strategy="steps",  # Added evaluation strategy
+    evaluation_strategy="steps",
     eval_steps=500,
     report_to="wandb",
-    fp16=True,  # Keep mixed precision
-    optim="adamw_torch_fused",  # Use memory-efficient optimizer
-    dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
-    gradient_checkpointing=True,  # Trade compute for memory
-    group_by_length=True,  # Reduce padding by grouping similar lengths
+    fp16=True,
+    optim="adamw_torch_fused",
+    dataloader_pin_memory=True,
+    gradient_checkpointing=True,
+    group_by_length=True,
+    save_safetensors=True,
+    lr_scheduler_type="cosine",
+    do_eval=True
 )
 
-# Initialize the Trainer with W&B callback for enhanced logging
-wandb_callback = WandbCallback()
-trainer = Trainer(
+# Initialize SFTTrainer instead of regular Trainer
+trainer = SFTTrainer(
     model=model,
     args=training_args,
     data_collator=data_collator,
     train_dataset=tokenized_train_dataset,
-    eval_dataset=tokenized_val_dataset,  # Added validation dataset
-    callbacks=[wandb_callback],
+    eval_dataset=tokenized_val_dataset,
+    peft_config=lora_config  # Pass LoRA config directly to SFTTrainer
 )
 
 # Train the model
@@ -190,14 +207,14 @@ trainer.train()
 print("Training completed!")
 
 # Save the fine-tuned model
-model_save_path = "./models/gpt2-math-instruct"
+model_save_path = "./models/gpt2-math-instruct-lora"
 trainer.save_model(model_save_path)
 tokenizer.save_pretrained(model_save_path)
 print(f"Model saved to {model_save_path}")
 
 # Log the model to Weights & Biases
 artifact = wandb.Artifact(
-    name="gpt2-math-model-finetuned",
+    name="gpt2-math-model-lora-finetuned",
     type="model"
 )
 artifact.add_dir(model_save_path)
@@ -206,4 +223,4 @@ wandb.log_artifact(artifact)
 # Finish the W&B run
 wandb.finish()
 
-print("Fine-tuning process completed successfully!")
+print("Fine-tuning process with LoRA completed successfully!")
