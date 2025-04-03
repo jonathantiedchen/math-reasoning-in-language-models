@@ -23,10 +23,10 @@ from peft import (
 # Initialize Weights & Biases with more configuration options
 wandb.init(
     entity="master_thesis_math_lm",
-    project="Mistral-math-instruct",
+    project="mistral-math-instruct",
     name="mistral-instruction-learning-lora",
     config={
-        "model_name": "master_thesis_math_lm/mistral-math-lora/mistral-7b-math-unsloth-model:v0",
+        "model_name": "master_thesis_math_lm/mistral-cl-final/mistral-math-sft-final:v0",
         
         ################  ADJUST  ################
         # You may need to adjust these parameters based on your computational resources
@@ -44,11 +44,12 @@ wandb.init(
         "lora_alpha": 32,         # LoRA alpha parameter
         "lora_dropout": 0.05,     # Dropout probability for LoRA layers
         "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "test_size": 0.1          # Added test_size parameter for train/val split
     }
 )
 
 # Load pre-trained model and tokenizer from Weights & Biases
-model_name = "master_thesis_math_lm/mistral-math-lora/mistral-7b-math-unsloth-model:v0"
+model_name = "master_thesis_math_lm/mistral-cl-final/mistral-math-sft-final:v0"
 # First, download the model from W&B
 wandb_artifact = wandb.use_artifact(model_name)
 model_dir = wandb_artifact.download()
@@ -116,6 +117,22 @@ for source, count in sorted(filtered_source_counts.items(), key=lambda x: x[1], 
 wandb.log({"source_distribution_before": source_counts})
 wandb.log({"source_distribution_after": filtered_source_counts})
 
+# Split the filtered dataset into training and validation sets
+split_dataset = filtered_dataset.shuffle(seed=42).train_test_split(
+    test_size=wandb.config["test_size"],
+    seed=42
+)
+
+train_dataset = split_dataset["train"]
+val_dataset = split_dataset["test"]  # Note: "test" is the key for validation set in datasets library
+
+# Log dataset sizes
+print(f"\nSplit dataset into {len(train_dataset)} training examples and {len(val_dataset)} validation examples")
+wandb.log({
+    "train_size": len(train_dataset),
+    "eval_size": len(val_dataset),
+})
+
 # Function to tokenize and prepare the dataset - adjusted for Mistral
 def tokenize_function(examples):
     # Concatenate instructions and outputs with appropriate formatting
@@ -139,16 +156,25 @@ def tokenize_function(examples):
     
     return tokenized_inputs
 
-# Tokenize the FILTERED dataset
-tokenized_dataset = filtered_dataset.map(
+# Tokenize both train and validation datasets
+tokenized_train_dataset = train_dataset.map(
     tokenize_function,
     batched=True,
     batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
-    remove_columns=filtered_dataset.column_names,
+    remove_columns=train_dataset.column_names,
     desc="Tokenizing training dataset"
 )
 
-print(f"\nPrepared training dataset: {len(tokenized_dataset)} examples")
+tokenized_val_dataset = val_dataset.map(
+    tokenize_function,
+    batched=True,
+    batch_size=32,
+    remove_columns=val_dataset.column_names,
+    desc="Tokenizing validation dataset"
+)
+
+print(f"\nPrepared training dataset: {len(tokenized_train_dataset)} examples")
+print(f"Prepared validation dataset: {len(tokenized_val_dataset)} examples")
 
 # Free up some memory
 torch.cuda.empty_cache()
@@ -159,13 +185,14 @@ data_collator = DataCollatorForLanguageModeling(
     mlm=False  # We're not doing masked language modeling
 )
 
-# Set up training arguments with memory optimizations
+# Set up training arguments with memory optimizations and evaluation
 training_args = TrainingArguments(
     output_dir="./models/mistral-math-instruct-lora",
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
     per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,  # Added eval batch size
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=1000,
     save_total_limit=2,
@@ -174,6 +201,8 @@ training_args = TrainingArguments(
     learning_rate=5e-5,
     weight_decay=0.01,
     warmup_steps=100,
+    evaluation_strategy="steps",  # Added evaluation strategy
+    eval_steps=500,  # Evaluate every 500 steps
     report_to="wandb",
     fp16=True,  # Keep mixed precision
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
@@ -188,7 +217,8 @@ trainer = Trainer(
     model=model,
     args=training_args,
     data_collator=data_collator,
-    train_dataset=tokenized_dataset,
+    train_dataset=tokenized_train_dataset,
+    eval_dataset=tokenized_val_dataset,  # Added validation dataset
     callbacks=[wandb_callback],
 )
 
