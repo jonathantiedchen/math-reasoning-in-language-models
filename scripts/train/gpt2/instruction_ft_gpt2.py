@@ -22,7 +22,7 @@ wandb.init(
     config={
         "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 8,  # Reduced batch size
+        "batch_size": 16,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
         "learning_rate": 5e-5,
         "epochs": 1,
@@ -153,8 +153,8 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,  # Added eval batch size
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,  # Added eval batch size
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=1000,
     save_total_limit=2,
