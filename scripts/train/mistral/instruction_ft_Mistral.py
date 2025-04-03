@@ -33,11 +33,11 @@ wandb.init(
         ##########################################
         
         "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 32,
+        "batch_size": 2,
         "gradient_accumulation_steps": 4,
         "learning_rate": 5e-5,
         "epochs": 1,
-        "max_steps": 1000,
+        "max_steps": 10000,
         "num_workers": 4,
         # LoRA specific parameters
         "lora_r": 16,             # LoRA attention dimension
@@ -165,11 +165,11 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
-    per_device_train_batch_size=32,
+    per_device_train_batch_size=2,
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=1000,
     save_total_limit=2,
-    max_steps=25000,
+    max_steps=10000,
     logging_steps=100,
     learning_rate=5e-5,
     weight_decay=0.01,

@@ -26,7 +26,7 @@ wandb.init(
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
         "learning_rate": 5e-5,
         "epochs": 1,
-        "max_steps": 20000,
+        "max_steps": 10000,
         "num_workers": 8,
         "test_size": 0.1  # Added test_size parameter for train/val split
     }
@@ -158,7 +158,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
     save_steps=1000,
     save_total_limit=2,
-    max_steps=20000,
+    max_steps=10000,
     logging_steps=100,
     learning_rate=5e-5,
     weight_decay=0.01,
