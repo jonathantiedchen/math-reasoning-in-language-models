@@ -430,8 +430,8 @@ def load_paramawps_data(file_path):
     print(f"Loaded {len(problems)} problems from ParaMAWPS")
     return problems
 
-def load_svamp_data(file_path):
-    """Load and parse SVAMP JSON data"""
+
+"""def load_svamp_data(file_path):
     with open(file_path, 'r') as f:
         data = json.load(f)
     
@@ -451,6 +451,7 @@ def load_svamp_data(file_path):
     
     print(f"Loaded {len(problems)} problems from SVAMP")
     return problems
+"""
 
 def load_dmath_data(file_path):
     """Load and parse DMath JSON data"""
@@ -501,7 +502,7 @@ def get_cl_learning_data():
         sys.path.insert(0, parent_dir)
     
     # Import data loading functions
-    from utils.data import load_asdiv_data, load_paramawps_data, load_svamp_data, load_dmath_data
+    from utils.data import load_asdiv_data, load_paramawps_data, load_dmath_data
     
     # Find data root directory
     data_root = None
