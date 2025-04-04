@@ -565,12 +565,6 @@ def get_cl_learning_data():
             "format": lambda item: format_with_solution(item, 'Equation')
         },
         {
-            "name": "SVAMP",
-            "path": os.path.join(data_root, "data", "curriculum_learning", "3_SVAMP", "SVAMP.json"),
-            "loader": load_svamp_data,
-            "format": lambda item: format_with_solution(item, 'Equation')
-        },
-        {
             "name": "DMath",
             "path": os.path.join(data_root, "data", "curriculum_learning", "4_Dmath", "dmath_train.json"),
             "loader": load_dmath_data,
