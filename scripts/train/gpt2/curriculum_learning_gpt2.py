@@ -155,7 +155,7 @@ for dataset_name, dataset_samples in dataset_dict.items():
     trainer.save_model(final_model_path)
     
     # Log model to wandb, using the model_name variable we defined
-    final_artifact = wandb.Artifact(f"gpt2-math-sft-{model_name}", type="model")
+    final_artifact = wandb.Artifact(f"gpt2-math-cl-{model_name}", type="model")
     final_artifact.add_dir(final_model_path)
     run.log_artifact(final_artifact)
     
