@@ -461,10 +461,9 @@ def load_dmath_data(file_path):
     problems = []
     for item_id, item_data in data.items():
         question = item_data.get("question_en", "").strip()
-        solution = item_data.get("solution_code_en", "").strip()  # Using solution_code_en
         answer = item_data.get("answer_en", "").strip()
         
-        text = f"Question: {question}\nSolution: {solution}\nAnswer: {answer}"
+        text = f"Question: {question}\nAnswer: {answer}"
         problems.append({"text": text})
     
     print(f"Loaded {len(problems)} problems from DMath")
@@ -562,7 +561,7 @@ def get_cl_learning_data():
             "name": "ParaMAWPS",
             "path": os.path.join(data_root, "data", "curriculum_learning", "2_ParaMAWPS", "ParaMAWPS_trainset.json"),
             "loader": load_paramawps_data,
-            "format": lambda item: format_with_solution(item, 'Equation')
+            "format": lambda item: format_with_solution(item, 'Ans')
         },
         {
             "name": "DMath",
