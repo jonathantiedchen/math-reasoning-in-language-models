@@ -175,7 +175,9 @@ for dataset_name, dataset_samples in dataset_dict.items():
 
     # Save final model for this dataset
     final_model_path = f"{dataset_output_dir}/final"
-    trainer.save_model(final_model_path)
+    model.save_pretrained(final_model_path)
+    tokenizer.save_pretrained(final_model_path)
+    print(f"LoRA adapter saved to {final_model_path}")
     
     # Log model to wandb using the model_name variable
     final_artifact = wandb.Artifact(f"gpt2-large-curriculum-learning-{model_name}", type="model")
