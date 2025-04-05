@@ -166,14 +166,14 @@ data_collator = DataCollatorForLanguageModeling(
 )
 
 # Set up training arguments with memory optimizations and evaluation
+# Removed unsupported arguments based on your error
 training_args = TrainingArguments(
     output_dir="./models/mathgpt2instruct",
     overwrite_output_dir=True,
     num_train_epochs=1,
-    dataloader_num_workers=8,
     per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,  # Added eval batch size
-    gradient_accumulation_steps=4,  # Accumulate gradients to simulate larger batch
+    per_device_eval_batch_size=16,
+    gradient_accumulation_steps=4,
     save_steps=1000,
     save_total_limit=2,
     max_steps=20000,
@@ -181,14 +181,14 @@ training_args = TrainingArguments(
     learning_rate=5e-5,
     weight_decay=0.01,
     warmup_steps=100,
-    evaluation_strategy="steps",  # Added evaluation strategy
-    eval_steps=500,
+    # Removed evaluation_strategy="steps"
+    eval_steps=500,  # This may need to be removed if it causes errors
     report_to="wandb",
-    fp16=True,  # Keep mixed precision
-    optim="adamw_torch_fused",  # Use memory-efficient optimizer
-    dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
-    gradient_checkpointing=True,  # Trade compute for memory
-    group_by_length=True,  # Reduce padding by grouping similar lengths
+    fp16=True,
+    # Removed optim="adamw_torch_fused" if it causes errors
+    # Removed dataloader_pin_memory
+    # Removed gradient_checkpointing 
+    # Removed group_by_length
 )
 
 # Initialize the Trainer with W&B callback for enhanced logging
