@@ -20,7 +20,7 @@ wandb.init(
     project="gpt2-math-instruct",
     name="GPT-2-small-IL-final",
     config={
-        "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0",
+        "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-cl-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",
         "batch_size": 16,  # Reduced batch size
         "gradient_accumulation_steps": 4,  # Added gradient accumulation
@@ -33,7 +33,7 @@ wandb.init(
 )
 
 # Load pre-trained model and tokenizer from Weights & Biases
-model_name = "master_thesis_math_lm/gpt2-cl-final/gpt2-math-sft-final:v0"
+model_name = "master_thesis_math_lm/gpt2-cl-final/gpt2-math-cl-final:v0"
 # First, download the model from W&B
 wandb_artifact = wandb.use_artifact(model_name)
 model_dir = wandb_artifact.download()
@@ -60,13 +60,31 @@ for source, count in sorted(source_counts.items(), key=lambda x: x[1], reverse=T
 pot_examples = [example for example in dataset["source"] if example.startswith("data/PoT/")]
 print(f"\nNumber of examples with source starting with 'data/PoT/': {len(pot_examples)}")
 
-# Filter out examples where source starts with "data/PoT/"
-def filter_pot_sources(example):
-    return not example["source"].startswith("data/PoT/")
+# Define sources to be filtered out (original + new ones)
+sources_to_filter = [
+    "data/PoT/",  # Original filter (filter anything starting with "data/PoT/")
+    "data/CoT/gsm_rft.json",
+    "data/CoT/gsm_train.json",
+    "data/CoT/aqua_rat.json",
+]
+
+# Modified filter function to exclude all specified sources
+def filter_sources(example):
+    # Check if the source starts with "data/PoT/" or exactly matches any of the other sources to filter
+    for source in sources_to_filter:
+        if source.endswith("/"):
+            # For paths ending with "/", check if the source starts with this path
+            if example["source"].startswith(source):
+                return False
+        else:
+            # For specific files, check for exact match
+            if example["source"] == source:
+                return False
+    return True
 
 # Apply the filter to the dataset
-filtered_dataset = dataset.filter(filter_pot_sources)
-print(f"\nFiltered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} PoT examples)")
+filtered_dataset = dataset.filter(filter_sources)
+print(f"\nFiltered dataset: {len(filtered_dataset)} examples (removed {len(dataset) - len(filtered_dataset)} examples)")
 
 # Print the source distribution after filtering
 filtered_source_counts = Counter(filtered_dataset["source"])
@@ -197,7 +215,7 @@ print(f"Model saved to {model_save_path}")
 
 # Log the model to Weights & Biases
 artifact = wandb.Artifact(
-    name="gpt2-math-model-finetuned",
+    name="gpt2-small-ft-final",
     type="model"
 )
 artifact.add_dir(model_save_path)
