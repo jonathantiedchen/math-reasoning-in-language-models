@@ -1,34 +1,32 @@
 import os
 import torch
 import wandb
-import math
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import (
     GPT2LMHeadModel,
     GPT2Tokenizer,
-    Trainer,
-    TrainingArguments,
-    DataCollatorForLanguageModeling,
-    integrations
+    DataCollatorForLanguageModeling
 )
-from transformers.integrations import WandbCallback
+from trl import SFTTrainer, SFTConfig
 from collections import Counter
 
 # Initialize Weights & Biases with more configuration options
 wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-math-instruct",
-    name="GPT-2-small-IL-final",
+    name="GPT-2-small-IL-final02",
     config={
         "model_name": "master_thesis_math_lm/gpt2-cl-final/gpt2-math-cl-final:v0",
         "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 16,  # Reduced batch size
-        "gradient_accumulation_steps": 4,  # Added gradient accumulation
+        "batch_size": 16,
+        "gradient_accumulation_steps": 4,
         "learning_rate": 5e-5,
         "epochs": 1,
         "max_steps": 20000,
         "num_workers": 8,
-        "test_size": 0.1  # Added test_size parameter for train/val split
+        "test_size": 0.1,
+        "lr_scheduler": "cosine",
+        "warmup_steps": 100
     }
 )
 
@@ -96,32 +94,23 @@ for source, count in sorted(filtered_source_counts.items(), key=lambda x: x[1], 
 wandb.log({"source_distribution_before": source_counts})
 wandb.log({"source_distribution_after": filtered_source_counts})
 
-# Function to tokenize and prepare the dataset
-def tokenize_function(examples):
-    # Concatenate instructions and outputs with appropriate formatting
-    texts = []
-    for instruction, output in zip(examples["instruction"], examples["output"]):
-        # Format: Instruction: [instruction] Output: [output]
-        formatted_text = f"Instruction: {instruction}\nOutput: {output}"
-        texts.append(formatted_text)
-    
-    # Tokenize with padding but use a smaller max_length
-    tokenized_inputs = tokenizer(
-        texts,
-        padding="max_length",
-        truncation=True,
-        max_length=1024,  # Reduced from 1024 to save memory
-        return_tensors="pt"
-    )
-    
-    # Set up labels for language modeling (same as input_ids)
-    tokenized_inputs["labels"] = tokenized_inputs["input_ids"].clone()
-    
-    return tokenized_inputs
+# Prepare data for SFTTrainer
+def prepare_dataset_for_sft(dataset):
+    # Format each example as needed for SFTTrainer
+    formatted_data = []
+    for example in dataset:
+        formatted_text = f"Instruction: {example['instruction']}\nOutput: {example['output']}"
+        formatted_data.append({"prompt": formatted_text})
+    return formatted_data
+
+# Format the filtered dataset
+formatted_data = prepare_dataset_for_sft(filtered_dataset)
+formatted_dataset = Dataset.from_dict({
+    "prompt": [item["prompt"] for item in formatted_data]
+})
 
 # Split the filtered dataset into training and validation sets
-# Following the approach from the first code
-split_dataset = filtered_dataset.shuffle(seed=42).train_test_split(
+split_dataset = formatted_dataset.shuffle(seed=42).train_test_split(
     test_size=wandb.config["test_size"],
     seed=42
 )
@@ -136,25 +125,25 @@ wandb.log({
     "eval_size": len(val_dataset),
 })
 
-# Tokenize both train and validation datasets
-tokenized_train_dataset = train_dataset.map(
-    tokenize_function,
-    batched=True,
-    batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
-    remove_columns=train_dataset.column_names,
-    desc="Tokenizing training dataset"
-)
+# Tokenizer function for preprocessing datasets
+def tokenize_datasets(dataset):
+    tokenized_dataset = dataset.map(
+        lambda example: tokenizer(
+            example['prompt'],
+            truncation=True,
+            max_length=1024,
+        ),
+        batched=True,
+        remove_columns=['prompt']
+    )
+    return tokenized_dataset
 
-tokenized_val_dataset = val_dataset.map(
-    tokenize_function,
-    batched=True,
-    batch_size=32,
-    remove_columns=val_dataset.column_names,
-    desc="Tokenizing validation dataset"
-)
+# Tokenize train and validation datasets
+tokenized_train = tokenize_datasets(train_dataset)
+tokenized_val = tokenize_datasets(val_dataset)
 
-print(f"\nPrepared training dataset: {len(tokenized_train_dataset)} examples")
-print(f"Prepared validation dataset: {len(tokenized_val_dataset)} examples")
+print(f"\nPrepared training dataset: {len(tokenized_train)} examples")
+print(f"Prepared validation dataset: {len(tokenized_val)} examples")
 
 # Free up some memory
 torch.cuda.empty_cache()
@@ -165,41 +154,38 @@ data_collator = DataCollatorForLanguageModeling(
     mlm=False  # We're not doing masked language modeling
 )
 
-# Set up training arguments with memory optimizations and evaluation
-# Removed unsupported arguments based on your error
-training_args = TrainingArguments(
-    output_dir="./models/mathgpt2instruct",
-    overwrite_output_dir=True,
-    num_train_epochs=1,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
-    gradient_accumulation_steps=4,
-    save_steps=1000,
-    save_total_limit=2,
-    max_steps=20000,
-    logging_steps=100,
-    learning_rate=5e-5,
-    weight_decay=0.01,
-    warmup_steps=100,
-    # Removed evaluation_strategy="steps"
-    eval_steps=500,  # This may need to be removed if it causes errors
-    report_to="wandb",
-    fp16=True,
-    # Removed optim="adamw_torch_fused" if it causes errors
-    # Removed dataloader_pin_memory
-    # Removed gradient_checkpointing 
-    # Removed group_by_length
-)
+# Create output directory
+output_dir = "./models/mathgpt2instruct"
+os.makedirs(output_dir, exist_ok=True)
 
-# Initialize the Trainer with W&B callback for enhanced logging
-wandb_callback = WandbCallback()
-trainer = Trainer(
+# Initialize the SFTTrainer
+print("Initializing SFTTrainer...")
+trainer = SFTTrainer(
     model=model,
-    args=training_args,
-    data_collator=data_collator,
-    train_dataset=tokenized_train_dataset,
-    eval_dataset=tokenized_val_dataset,  # Added validation dataset
-    callbacks=[wandb_callback],
+    train_dataset=tokenized_train,
+    eval_dataset=tokenized_val,
+    args=SFTConfig(
+        output_dir=output_dir,
+        gradient_accumulation_steps=wandb.config["gradient_accumulation_steps"],
+        do_eval=True,
+        evaluation_strategy="steps",
+        per_device_train_batch_size=wandb.config["batch_size"],
+        per_device_eval_batch_size=wandb.config["batch_size"],
+        log_level="info",
+        save_strategy="steps",
+        save_steps=1000,
+        save_total_limit=2,
+        save_safetensors=True,
+        fp16=True,
+        logging_steps=100,
+        learning_rate=wandb.config["learning_rate"],
+        eval_steps=500,
+        max_steps=wandb.config["max_steps"],
+        warmup_steps=wandb.config["warmup_steps"],
+        lr_scheduler_type="cosine",
+        report_to="wandb"
+    ),
+    data_collator=data_collator
 )
 
 # Train the model
@@ -208,7 +194,8 @@ trainer.train()
 print("Training completed!")
 
 # Save the fine-tuned model
-model_save_path = "./models/gpt2-math-instruct"
+model_save_path = f"{output_dir}/final"
+os.makedirs(model_save_path, exist_ok=True)
 trainer.save_model(model_save_path)
 tokenizer.save_pretrained(model_save_path)
 print(f"Model saved to {model_save_path}")
