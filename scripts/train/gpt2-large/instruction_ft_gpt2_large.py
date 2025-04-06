@@ -38,7 +38,7 @@ wandb_config = {
 run = wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-large-math-instruct",
-    name="GPT-2-large-IL-chained-final-trainer",
+    name="GPT-2-large-IL-final",
     config=wandb_config
 )
 
