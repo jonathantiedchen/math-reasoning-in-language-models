@@ -13,35 +13,44 @@ from collections import Counter
 from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer, SFTConfig  # Import SFTTrainer and SFTConfig from trl
 
+# Define wandb configuration
+wandb_config = {
+    "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0",
+    "learning_rate": 2e-5,
+    "batch_size": 8,
+    "max_steps": 5000,
+    "warmup_steps": 100,
+    "save_steps": 1000,
+    "eval_steps": 500,
+    "fp16": True,
+    "gradient_accumulation_steps": 8,
+    "lr_scheduler": "cosine",
+    "training_approach": "curriculum_learning_lora",
+    "datasets": ["ASDiv", "ParaMAWPS", "DMath"],
+    "samples_per_dataset": 5,
+    "test_size": 0.1,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05
+}
+
 # Initialize Weights & Biases with more configuration options
 wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-large-math-instruct",
     name="GPT-2-large-IL-final",
-    config={
-        "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0",
-        "dataset": "TIGER-Lab/MathInstruct",
-        "batch_size": 8,  # Reduced batch size
-        "gradient_accumulation_steps": 4,  # Added gradient accumulation
-        "learning_rate": 5e-5,
-        "epochs": 1,
-        "max_steps": 10000,
-        "num_workers": 8,
-        "test_size": 0.1,  # Added test_size parameter for train/val split
-        "lora_r": 16,
-        "lora_alpha": 32,
-        "lora_dropout": 0.05
-    }
+    config=wandb_config
 )
 
-# Load pre-trained model and tokenizer from Weights & Biases
-model_name = "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0"
-# First, download the model from W&B
-wandb_artifact = wandb.use_artifact(model_name)
-model_dir = wandb_artifact.download()
+# Load pre-trained model and tokenizer from Weights & Biases using API approach
+api = wandb.Api()
+artifact = api.artifact('master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0', type='model')
+artifact_dir = artifact.download()
+
 # Load the model and tokenizer from the downloaded directory
-tokenizer = GPT2Tokenizer.from_pretrained(model_dir)
-model = GPT2LMHeadModel.from_pretrained(model_dir)
+tokenizer = GPT2Tokenizer.from_pretrained(artifact_dir)
+model = GPT2LMHeadModel.from_pretrained(artifact_dir)
+print("Model and tokenizer loaded successfully")
 
 # GPT-2 tokenizer doesn't have a padding token by default
 if tokenizer.pad_token is None:
@@ -50,9 +59,9 @@ if tokenizer.pad_token is None:
 
 # Define LoRA configuration
 lora_config = LoraConfig(
-    r=wandb.config["lora_r"],
-    lora_alpha=wandb.config["lora_alpha"],
-    lora_dropout=wandb.config["lora_dropout"],
+    r=wandb_config["lora_r"],
+    lora_alpha=wandb_config["lora_alpha"],
+    lora_dropout=wandb_config["lora_dropout"],
     bias="none",
     task_type="CAUSAL_LM"
 )
@@ -131,9 +140,8 @@ def tokenize_function(examples):
     return tokenized_inputs
 
 # Split the filtered dataset into training and validation sets
-# Following the approach from the first code
 split_dataset = filtered_dataset.shuffle(seed=42).train_test_split(
-    test_size=wandb.config["test_size"],
+    test_size=wandb_config["test_size"],
     seed=42
 )
 
@@ -186,26 +194,26 @@ training_args = SFTConfig(
     overwrite_output_dir=True,
     num_train_epochs=1,
     dataloader_num_workers=8,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
-    gradient_accumulation_steps=4,
-    save_steps=1000,
+    per_device_train_batch_size=wandb_config["batch_size"],
+    per_device_eval_batch_size=wandb_config["batch_size"],
+    gradient_accumulation_steps=wandb_config["gradient_accumulation_steps"],
+    save_steps=wandb_config["save_steps"],
     save_total_limit=2,
-    max_steps=10000,
+    max_steps=wandb_config["max_steps"],
     logging_steps=100,
-    learning_rate=5e-5,
+    learning_rate=wandb_config["learning_rate"],
     weight_decay=0.01,
-    warmup_steps=100,
+    warmup_steps=wandb_config["warmup_steps"],
     evaluation_strategy="steps",
-    eval_steps=500,
+    eval_steps=wandb_config["eval_steps"],
     report_to="wandb",
-    fp16=True,
+    fp16=wandb_config["fp16"],
     optim="adamw_torch_fused",
     dataloader_pin_memory=True,
     gradient_checkpointing=True,
     group_by_length=True,
     save_safetensors=True,
-    lr_scheduler_type="cosine",
+    lr_scheduler_type=wandb_config["lr_scheduler"],
     do_eval=True
 )
 
