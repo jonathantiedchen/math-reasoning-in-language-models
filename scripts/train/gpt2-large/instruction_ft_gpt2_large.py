@@ -6,12 +6,13 @@ from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    Trainer,
+    TrainingArguments
 )
 from transformers.integrations import WandbCallback
 from collections import Counter
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
-from trl import SFTTrainer, SFTConfig  # Import SFTTrainer and SFTConfig from trl
 
 # Define wandb configuration
 wandb_config = {
@@ -37,7 +38,7 @@ wandb_config = {
 run = wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-large-math-instruct",
-    name="GPT-2-large-IL-chained-final",
+    name="GPT-2-large-IL-chained-final-trainer",
     config=wandb_config
 )
 
@@ -57,6 +58,8 @@ print("Downloading curriculum learning adapter from W&B...")
 artifact = api.artifact('master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0', type='model')
 adapter_dir = artifact.download()
 
+# List the files in the adapter directory to debug
+print(f"Files in adapter directory: {os.listdir(adapter_dir)}")
 
 # Load the adapter onto the base model
 print("Loading curriculum learning adapter...")
@@ -87,7 +90,7 @@ try:
 except Exception as e:
     print(f"Error loading/merging adapter: {e}")
     print("Falling back to using base model only")
-    break
+    model = base_model
 
 # Ensure model is in training mode before applying new LoRA
 model.train()
@@ -110,6 +113,12 @@ lora_config = LoraConfig(
 # Get a fresh PEFT model with these adapters
 model = get_peft_model(model, lora_config)
 model.print_trainable_parameters()  # This should show parameters as trainable
+
+# Verify parameters require gradients
+trainable_params = sum(p.requires_grad for p in model.parameters())
+print(f"Number of parameters requiring gradients: {trainable_params}")
+if trainable_params == 0:
+    raise ValueError("No parameters require gradients! Training will fail.")
 
 # Load the TIGER-Lab/MathInstruct dataset - just the train split
 dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
@@ -161,31 +170,35 @@ for source, count in sorted(filtered_source_counts.items(), key=lambda x: x[1], 
 wandb.log({"source_distribution_before": source_counts})
 wandb.log({"source_distribution_after": filtered_source_counts})
 
+# Function to format the instruction and output
+def format_instruction_output(example):
+    formatted_text = f"Instruction: {example['instruction']}\nOutput: {example['output']}"
+    return {"text": formatted_text}
+
+# Apply the formatting function
+formatted_dataset = filtered_dataset.map(
+    format_instruction_output,
+    remove_columns=["instruction", "output", "source"],  # Remove original fields
+)
+
 # Function to tokenize and prepare the dataset
 def tokenize_function(examples):
-    # Concatenate instructions and outputs with appropriate formatting
-    texts = []
-    for instruction, output in zip(examples["instruction"], examples["output"]):
-        # Format: Instruction: [instruction] Output: [output]
-        formatted_text = f"Instruction: {instruction}\nOutput: {output}"
-        texts.append(formatted_text)
-    
-    # Tokenize with padding but use a smaller max_length
+    # Tokenize the text
     tokenized_inputs = tokenizer(
-        texts,
+        examples["text"],
         padding="max_length",
         truncation=True,
-        max_length=1024,  # Reduced from 1024 to save memory
+        max_length=1024,
         return_tensors="pt"
     )
     
-    # Set up labels for language modeling (same as input_ids)
+    # Set up labels for causal language modeling (same as input_ids)
     tokenized_inputs["labels"] = tokenized_inputs["input_ids"].clone()
     
     return tokenized_inputs
 
-# Split the filtered dataset into training and validation sets
-split_dataset = filtered_dataset.shuffle(seed=42).train_test_split(
+# Split the formatted dataset into training and validation sets
+split_dataset = formatted_dataset.shuffle(seed=42).train_test_split(
     test_size=wandb_config["test_size"],
     seed=42
 )
@@ -233,11 +246,10 @@ data_collator = DataCollatorForLanguageModeling(
 output_dir = "./models/mathgpt2instruct_lora"
 os.makedirs(output_dir, exist_ok=True)
 
-# Setup SFTConfig instead of TrainingArguments
-training_args = SFTConfig(
+# Setup TrainingArguments instead of SFTConfig
+training_args = TrainingArguments(
     output_dir=output_dir,
     overwrite_output_dir=True,
-    dataloader_num_workers=8,
     per_device_train_batch_size=wandb_config["batch_size"],
     per_device_eval_batch_size=wandb_config["batch_size"],
     gradient_accumulation_steps=wandb_config["gradient_accumulation_steps"],
@@ -257,17 +269,17 @@ training_args = SFTConfig(
     group_by_length=True,
     save_safetensors=True,
     lr_scheduler_type=wandb_config["lr_scheduler"],
-    do_eval=True
+    # Include run_name to match W&B initialization
+    run_name=f"GPT-2-large-IL-chained-final-trainer",
 )
 
-# Initialize SFTTrainer REMOVING the peft_config parameter
-trainer = SFTTrainer(
+# Initialize standard Trainer instead of SFTTrainer
+trainer = Trainer(
     model=model,
     args=training_args,
     data_collator=data_collator,
     train_dataset=tokenized_train_dataset,
     eval_dataset=tokenized_val_dataset
-    # REMOVED: peft_config=lora_config - Do not pass this if model already has LoRA applied
 )
 
 # Train the model
