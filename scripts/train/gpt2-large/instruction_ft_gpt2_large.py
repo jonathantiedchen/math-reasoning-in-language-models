@@ -4,13 +4,13 @@ import wandb
 import math
 from datasets import load_dataset
 from transformers import (
-    GPT2LMHeadModel,
-    GPT2Tokenizer,
+    AutoModelForCausalLM,
+    AutoTokenizer,
     DataCollatorForLanguageModeling
 )
 from transformers.integrations import WandbCallback
 from collections import Counter
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
 from trl import SFTTrainer, SFTConfig  # Import SFTTrainer and SFTConfig from trl
 
 # Define wandb configuration
@@ -18,15 +18,14 @@ wandb_config = {
     "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0",
     "learning_rate": 2e-5,
     "batch_size": 8,
-    "max_steps": 5000,
+    "max_steps": 3,
     "warmup_steps": 100,
     "save_steps": 1000,
     "eval_steps": 500,
     "fp16": True,
     "gradient_accumulation_steps": 8,
     "lr_scheduler": "cosine",
-    "training_approach": "curriculum_learning_lora",
-    "datasets": ["ASDiv", "ParaMAWPS", "DMath"],
+    "training_approach": "instruction-fine-tuning",
     "samples_per_dataset": 5,
     "test_size": 0.1,
     "lora_r": 16,
@@ -35,36 +34,82 @@ wandb_config = {
 }
 
 # Initialize Weights & Biases with more configuration options
-wandb.init(
+run = wandb.init(
     entity="master_thesis_math_lm",
     project="gpt2-large-math-instruct",
-    name="GPT-2-large-IL-final",
+    name="GPT-2-large-IL-chained-final",
     config=wandb_config
 )
 
-# Load pre-trained model and tokenizer from Weights & Biases using API approach
-api = wandb.Api()
-artifact = api.artifact('master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0', type='model')
-artifact_dir = artifact.download()
-
-# Load the model and tokenizer from the downloaded directory
-tokenizer = GPT2Tokenizer.from_pretrained(artifact_dir)
-model = GPT2LMHeadModel.from_pretrained(artifact_dir)
-print("Model and tokenizer loaded successfully")
+print("Loading base GPT-2 model...")
+base_model_name = "gpt2-large"
+base_model = AutoModelForCausalLM.from_pretrained(base_model_name)
+tokenizer = AutoTokenizer.from_pretrained(base_model_name)
 
 # GPT-2 tokenizer doesn't have a padding token by default
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = model.config.eos_token_id
+    base_model.config.pad_token_id = base_model.config.eos_token_id
 
-# Define LoRA configuration
+# Now, load the curriculum learning adapter from W&B
+api = wandb.Api()
+print("Downloading curriculum learning adapter from W&B...")
+artifact = api.artifact('master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0', type='model')
+adapter_dir = artifact.download()
+
+
+# Load the adapter onto the base model
+print("Loading curriculum learning adapter...")
+try:
+    # First attempt to load the adapter as a PEFT model
+    adapted_model = PeftModel.from_pretrained(
+        base_model,
+        adapter_dir,
+        is_trainable=False  # Set to False since we'll merge it
+    )
+    
+    print("Successfully loaded curriculum learning adapter")
+    
+    # Merge the adapter with the base model
+    print("Merging curriculum learning adapter into base model...")
+    merged_model = adapted_model.merge_and_unload()
+    
+    print("Successfully merged adapter with base model")
+    
+    # Free up memory from the original models
+    del base_model
+    del adapted_model
+    torch.cuda.empty_cache()
+    
+    # Use the merged model for further training
+    model = merged_model
+    
+except Exception as e:
+    print(f"Error loading/merging adapter: {e}")
+    print("Falling back to using base model only")
+    break
+
+# Ensure model is in training mode before applying new LoRA
+model.train()
+model.gradient_checkpointing_enable()  # Enable gradient checkpointing for memory efficiency
+
+# Prepare model for training with new LoRA
+model = prepare_model_for_kbit_training(model)
+
+# Define NEW LoRA configuration for instruction tuning
+print("Applying new LoRA configuration for instruction fine-tuning...")
 lora_config = LoraConfig(
     r=wandb_config["lora_r"],
     lora_alpha=wandb_config["lora_alpha"],
     lora_dropout=wandb_config["lora_dropout"],
     bias="none",
+    target_modules=["c_attn", "c_proj", "c_fc"],  # Specify target modules for GPT-2
     task_type="CAUSAL_LM"
 )
+
+# Get a fresh PEFT model with these adapters
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()  # This should show parameters as trainable
 
 # Load the TIGER-Lab/MathInstruct dataset - just the train split
 dataset = load_dataset("TIGER-Lab/MathInstruct", split="train")
@@ -77,7 +122,7 @@ for source, count in sorted(source_counts.items(), key=lambda x: x[1], reverse=T
     print(f"{source}: {count} examples")
 
 # Print count of examples that will be filtered out
-pot_examples = [example for example in dataset["source"] if example.startswith("data/PoT/")]
+pot_examples = [example for example in dataset if example["source"].startswith("data/PoT/")]
 print(f"\nNumber of examples with source starting with 'data/PoT/': {len(pot_examples)}")
 
 # Define sources to be filtered out (original + new ones)
@@ -192,7 +237,6 @@ os.makedirs(output_dir, exist_ok=True)
 training_args = SFTConfig(
     output_dir=output_dir,
     overwrite_output_dir=True,
-    num_train_epochs=1,
     dataloader_num_workers=8,
     per_device_train_batch_size=wandb_config["batch_size"],
     per_device_eval_batch_size=wandb_config["batch_size"],
@@ -204,11 +248,10 @@ training_args = SFTConfig(
     learning_rate=wandb_config["learning_rate"],
     weight_decay=0.01,
     warmup_steps=wandb_config["warmup_steps"],
-    evaluation_strategy="steps",
+    eval_strategy="steps",
     eval_steps=wandb_config["eval_steps"],
     report_to="wandb",
     fp16=wandb_config["fp16"],
-    optim="adamw_torch_fused",
     dataloader_pin_memory=True,
     gradient_checkpointing=True,
     group_by_length=True,
@@ -217,14 +260,14 @@ training_args = SFTConfig(
     do_eval=True
 )
 
-# Initialize SFTTrainer instead of regular Trainer
+# Initialize SFTTrainer REMOVING the peft_config parameter
 trainer = SFTTrainer(
     model=model,
     args=training_args,
     data_collator=data_collator,
     train_dataset=tokenized_train_dataset,
-    eval_dataset=tokenized_val_dataset,
-    peft_config=lora_config  # Pass LoRA config directly to SFTTrainer
+    eval_dataset=tokenized_val_dataset
+    # REMOVED: peft_config=lora_config - Do not pass this if model already has LoRA applied
 )
 
 # Train the model
@@ -232,21 +275,38 @@ print("Starting training...")
 trainer.train()
 print("Training completed!")
 
-# Save the fine-tuned model
-model_save_path = "./models/gpt2-math-instruct-lora"
-trainer.save_model(model_save_path)
-tokenizer.save_pretrained(model_save_path)
-print(f"Model saved to {model_save_path}")
+# First save the adapter only (small file)
+adapter_save_path = "./models/gpt2-math-instruct-lora-adapter"
+trainer.save_model(adapter_save_path)
+tokenizer.save_pretrained(adapter_save_path)
+print(f"LoRA adapter saved to {adapter_save_path}")
 
-# Log the model to Weights & Biases
-artifact = wandb.Artifact(
-    name="gpt2-large-ft-final",
+# Now merge the adapter with the model and save the full model
+print("Merging LoRA adapter with model...")
+merged_model = model.merge_and_unload()
+
+# Save the full merged model (this will be large, ~1-3GB)
+full_model_save_path = "./models/gpt2-math-instruct-full"
+merged_model.save_pretrained(full_model_save_path)
+tokenizer.save_pretrained(full_model_save_path)
+print(f"Full merged model saved to {full_model_save_path}")
+
+# Log both to W&B
+adapter_artifact = wandb.Artifact(
+    name="gpt2-large-ft-adapter-final-chained",
     type="model"
 )
-artifact.add_dir(model_save_path)
-wandb.log_artifact(artifact)
+adapter_artifact.add_dir(adapter_save_path)
+run.log_artifact(adapter_artifact)
+
+full_model_artifact = wandb.Artifact(
+    name="gpt2-large-ft-full-final-chained",
+    type="model"
+)
+full_model_artifact.add_dir(full_model_save_path)
+run.log_artifact(full_model_artifact)
 
 # Finish the W&B run
 wandb.finish()
 
-print("Fine-tuning process with LoRA completed successfully!")
+print("Fine-tuning process with chained LoRA adapters completed successfully!")
