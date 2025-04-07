@@ -17,14 +17,14 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, Pe
 # Define wandb configuration
 wandb_config = {
     "model_name": "master_thesis_math_lm/gpt2-large-cl-final/gpt2-large-curriculum-learning-final:v0",
-    "learning_rate": 2e-5,
+    "learning_rate": 5e-5,
     "batch_size": 8,
-    "max_steps": 3,
+    "max_steps": 10000,
     "warmup_steps": 100,
     "save_steps": 1000,
     "eval_steps": 500,
     "fp16": True,
-    "gradient_accumulation_steps": 8,
+    "gradient_accumulation_steps": 4,
     "lr_scheduler": "cosine",
     "training_approach": "instruction-fine-tuning",
     "samples_per_dataset": 5,
