@@ -19,7 +19,7 @@ from datasets import load_dataset
 from collections import Counter
 import json
 import wandb
-  
+import weave
 
 def main():
     parser = argparse.ArgumentParser()
@@ -27,7 +27,9 @@ def main():
     parser.add_argument('--wandb_artifact', type=str, help='Full W&B artifact link (e.g., "username/project/model:v0")')
     parser.add_argument('--wandb_tokenizer_artifact', type=str, help='W&B tokenizer artifact (if different from model)')
     parser.add_argument('--use_majority_vote', action='store_true')
-    parser.add_argument("--temp", type=float, default=0)
+    parser.add_argument("--temp", type=float, default=1)
+    parser.add_argument("--top_k", type=float, default=50)
+    parser.add_argument("--top_p", type=float, default=1)
     parser.add_argument('--n_votes', type=int, default=1)
     parser.add_argument("--use_cot_prompt", action="store_true")
     parser.add_argument("--test_run", action="store_true", help="Run with only the first X problems")
@@ -56,13 +58,13 @@ def main():
         
         # Download model from W&B using run.use_artifact approach
         try:
-            run = wandb.init(project="model_evaluation", job_type="inference")
-            artifact = run.use_artifact(args.wandb_artifact, type='model')
+            api = wandb.Api()
+            artifact = api.artifact(args.wandb_artifact, type='model')
             model_dir = artifact.download(root=model_download_dir)
             
             # Get tokenizer artifact (if specified, otherwise use the same as model)
             if args.wandb_tokenizer_artifact:
-                tokenizer_artifact = run.use_artifact(args.wandb_tokenizer_artifact, type='model')
+                tokenizer_artifact = api.artifact(args.wandb_tokenizer_artifact, type='model')
                 tokenizer_dir = tokenizer_artifact.download(root=model_download_dir)
             else:
                 tokenizer_dir = model_dir
@@ -105,8 +107,10 @@ def main():
     ]
 
     results = []
+    client = weave.init('intro-example')
     for i in tqdm(range(datasize), desc='Evaluating'):
         example = dataset[i]
+        call = client.create_call(op=f"prompt_{i}", inputs={"model": args.wandb_artifact, "question": example['question'], "temperature":args.temp, "top_k":args.top_k,"top_p":args.top_p}, )
         if args.use_cot_prompt:
             input_text = "Q: {question}\nA: Let's think step by step.".format(question=example['question'])
         else:
@@ -114,7 +118,7 @@ def main():
         print(f"MODEL INPUT: {input_text}")
         inputs = tokenizer(input_text, return_tensors='pt').to(model.device)
         ground_truth_answer = extract_ground_truth(example['answer'])
-
+        
         # Define a stopping condition for generation
         stop_criteria = SpecificStringStoppingCriteria(tokenizer, generation_util, len(input_text))
         stopping_criteria_list = StoppingCriteriaList([stop_criteria])
@@ -123,7 +127,15 @@ def main():
         if args.use_majority_vote:
             for _ in range(args.n_votes):
                 with torch.no_grad():
-                    outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=512, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                    outputs = model.generate(
+                        **inputs, 
+                        temperature=args.temp, 
+                        top_k=args.top_k,
+                        top_p=args.top_p,
+                        max_new_tokens=512, 
+                        do_sample=True, 
+                        pad_token_id=tokenizer.eos_token_id, 
+                        stopping_criteria=stopping_criteria_list)
                 output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 # Extract the final answer from the model's output
                 output_text = output_text.split("A:")[-1].strip() 
@@ -142,7 +154,7 @@ def main():
         majority_answer = Counter(filtered_answers).most_common(1)[0][0] if filtered_answers else None
 
         correct = (majority_answer == ground_truth_answer) if majority_answer is not None else False
-        results.append({
+        outputs = {
             'question': example['question'],
             'gold_answer_text': example['answer'],
             'model_answers_text': [ma['text'] for ma in model_answers],
@@ -150,7 +162,9 @@ def main():
             'extracted_gold_answer': ground_truth_answer,
             'majority_answer': majority_answer,
             'correct': correct
-        })
+        }
+        results.append(outputs)
+        client.finish_call(call, output=outputs)
     
     cnt = 0
     for result in results:
@@ -182,7 +196,7 @@ def main():
         json.dump(results, f, indent=4)
 
     print(f"Results saved to {result_file}")
-                
+    
 
 if __name__ == '__main__':
     main()
