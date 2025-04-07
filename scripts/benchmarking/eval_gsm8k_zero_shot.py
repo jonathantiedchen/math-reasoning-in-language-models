@@ -44,13 +44,13 @@ def main():
     random.seed(random_seed)
 
     print('Loading model and tokenizer...')
-
+    model_artifact = args.model if not args.wandb_artifact else args.wandb_artifact
     # Start a WandB run for logging metrics
     wandb_run = wandb.init(
         project=f"gsm8k_evaluation",
-        name= f"gsm8k_evaluation_{args.model}",
+        name= f"gsm8k_evaluation_{model_artifact}",
         config={
-            "model": args.model if not args.wandb_artifact else args.wandb_artifact,
+            "model": model_artifact,
             "use_cot_prompt": args.use_cot_prompt,
             "use_majority_vote": args.use_majority_vote,
             "n_votes": args.n_votes,
@@ -129,7 +129,7 @@ def main():
         call = client.create_call(
             op=f"prompt_{i}", 
             inputs={
-                "model": args.wandb_artifact, 
+                "model": model_artifact, 
                 "question": example['question'], 
                 "temperature":args.temp, 
                 "top_k":args.top_k,
