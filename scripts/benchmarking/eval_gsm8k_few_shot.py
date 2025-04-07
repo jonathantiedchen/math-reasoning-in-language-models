@@ -55,8 +55,11 @@ def main():
     parser.add_argument('--wandb_artifact', type=str, help='Full W&B artifact link (e.g., "username/project/model:v0")')
     parser.add_argument('--wandb_tokenizer_artifact', type=str, help='W&B tokenizer artifact (if different from model)')
     parser.add_argument('--use_majority_vote', action='store_true')
-    parser.add_argument("--temp", type=float, default=0)
     parser.add_argument('--n_votes', type=int, default=1)
+    parser.add_argument("--temp", type=float, default=1)
+    parser.add_argument("--top_k", type=float, default=50)
+    parser.add_argument("--top_p", type=float, default=1)
+    parser.add_argument("--max_new_tokens", type=float, default=512)
     parser.add_argument("--test_run", action="store_true", help="Run with only the first X problems")
     parser.add_argument("--num_problems", type=int, default=10, help="Number of problems to use in test run")
     args = parser.parse_args()
@@ -67,6 +70,22 @@ def main():
     random.seed(random_seed)
 
     print('Loading model and tokenizer...')
+
+    # Start a WandB run for logging metrics
+    run = wandb.init(
+        project=f"gsm8k_evaluation",
+        name= f"gsm8k_evaluation_{args.model}",
+        config={
+            "model": args.model if not args.wandb_artifact else args.wandb_artifact,
+            "use_cot_prompt": args.use_cot_prompt,
+            "use_majority_vote": args.use_majority_vote,
+            "n_votes": args.n_votes,
+            "temperature": args.temp,
+            "top_k": args.top_k,
+            "top_p": args.top_p,
+            "max_new_tokens": args.max_new_tokens
+        }
+    )
     
     if args.wandb_artifact:
         # Login to Weights & Biases (requires API key in environment variable or login)
@@ -83,7 +102,6 @@ def main():
         
         # Download model from W&B using run.use_artifact approach
         try:
-            run = wandb.init(project="model_evaluation", job_type="inference")
             artifact = run.use_artifact(args.wandb_artifact, type='model')
             model_dir = artifact.download(root=model_download_dir)
             
@@ -132,8 +150,19 @@ def main():
     ]
 
     results = []
+    client = weave.init(f"gsm8k_evaluation")
     for i in tqdm(range(datasize), desc='Evaluating'):
         example = dataset[i]
+        call = client.create_call(
+            op=f"prompt_{i}", 
+            inputs={
+                "model": args.wandb_artifact, 
+                "question": example['question'], 
+                "temperature":args.temp, 
+                "top_k":args.top_k,
+                "top_p":args.top_p,
+                "max_new_tokens": args.max_new_tokens
+            })
         input_text = FEW_SHOT_PROMPT.format(question=example['question'])
         if i == 0:  # Print an example of the prompt for the first question
             print(f"EXAMPLE PROMPT: {input_text[:500]}...\n")
@@ -150,8 +179,21 @@ def main():
             for _ in range(args.n_votes):
                 with torch.no_grad():
                     if "gpt2" in args.model.lower(): 
-                        outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=256, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
-                    else: outputs = model.generate(**inputs, temperature=args.temp, max_new_tokens=512, do_sample=True, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                        outputs = model.generate(
+                            **inputs, 
+                            temperature=args.temp, 
+                            max_new_tokens=256, 
+                            do_sample=True, 
+                            pad_token_id=tokenizer.eos_token_id,
+                            stopping_criteria=stopping_criteria_list
+                        )
+                    else: outputs = model.generate(
+                        **inputs, 
+                        temperature=args.temp, 
+                        max_new_tokens=args.max_new_tokens, 
+                        do_sample=True, 
+                        pad_token_id=tokenizer.eos_token_id, 
+                        stopping_criteria=stopping_criteria_list)
                 output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 # Extract the final answer from the model's output
                 output_text = output_text.split("A:")[-1].strip() 
@@ -160,9 +202,18 @@ def main():
         else:
             with torch.no_grad():
                 if "gpt2" in args.model.lower(): 
-                    outputs = model.generate(**inputs, max_new_tokens=256, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                    outputs = model.generate(
+                        **inputs, 
+                        max_new_tokens=256, 
+                        pad_token_id=tokenizer.eos_token_id, 
+                        stopping_criteria=stopping_criteria_list
+                    )
                 else: 
-                    outputs = model.generate(**inputs, max_new_tokens=256, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                    outputs = model.generate(
+                        **inputs, 
+                        max_new_tokens=args.max_new_tokens, 
+                        pad_token_id=tokenizer.eos_token_id, 
+                        stopping_criteria=stopping_criteria_list)
 
             output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
             output_text = output_text.split("A:")[-1].strip() 
@@ -174,7 +225,7 @@ def main():
         majority_answer = Counter(filtered_answers).most_common(1)[0][0] if filtered_answers else None
 
         correct = (majority_answer == ground_truth_answer) if majority_answer is not None else False
-        results.append({
+        outputs = {
             'question': example['question'],
             'gold_answer_text': example['answer'],
             'model_answers_text': [ma['text'] for ma in model_answers],
@@ -182,17 +233,23 @@ def main():
             'extracted_gold_answer': ground_truth_answer,
             'majority_answer': majority_answer,
             'correct': correct
-        })
+        }
+        results.append(outputs)
+        client.finish_call(call, output=outputs)
     
     cnt = 0
     for result in results:
         if result['correct']:
             cnt += 1
     total = len(results)
+    accuracy = cnt/total
     print(f"Accuracy: {cnt} / {total} = {cnt / total :.4f}")
 
     results.append({'accuracy': cnt / total})
 
+    # Log the accuracy to WandB
+    wandb.log({"accuracy": accuracy, "correct_count": cnt, "total_samples": total})
+    
     os.makedirs('eval_results/few_shot', exist_ok=True)
     
     # Determine model name for results file

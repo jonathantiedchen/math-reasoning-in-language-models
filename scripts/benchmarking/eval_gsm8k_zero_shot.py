@@ -21,16 +21,18 @@ import json
 import wandb
 import weave
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='mistralai/Mistral-7B-v0.1', help='HuggingFace model path or name')
     parser.add_argument('--wandb_artifact', type=str, help='Full W&B artifact link (e.g., "username/project/model:v0")')
     parser.add_argument('--wandb_tokenizer_artifact', type=str, help='W&B tokenizer artifact (if different from model)')
     parser.add_argument('--use_majority_vote', action='store_true')
+    parser.add_argument('--n_votes', type=int, default=1)
     parser.add_argument("--temp", type=float, default=1)
     parser.add_argument("--top_k", type=float, default=50)
     parser.add_argument("--top_p", type=float, default=1)
-    parser.add_argument('--n_votes', type=int, default=1)
+    parser.add_argument("--max_new_tokens", type=float, default=512)
     parser.add_argument("--use_cot_prompt", action="store_true")
     parser.add_argument("--test_run", action="store_true", help="Run with only the first X problems")
     parser.add_argument("--num_problems", type=int, default=10, help="Number of problems to use in test run")
@@ -42,6 +44,23 @@ def main():
     random.seed(random_seed)
 
     print('Loading model and tokenizer...')
+
+    # Start a WandB run for logging metrics
+    wandb_run = wandb.init(
+        project=f"gsm8k_evaluation",
+        name= f"gsm8k_evaluation_{args.model}",
+        config={
+            "model": args.model if not args.wandb_artifact else args.wandb_artifact,
+            "use_cot_prompt": args.use_cot_prompt,
+            "use_majority_vote": args.use_majority_vote,
+            "n_votes": args.n_votes,
+            "temperature": args.temp,
+            "top_k": args.top_k,
+            "top_p": args.top_p,
+            "max_new_tokens": args.max_new_tokens
+        }
+    )
+    
     
     if args.wandb_artifact:
         # Login to Weights & Biases (requires API key in environment variable or login)
@@ -58,13 +77,12 @@ def main():
         
         # Download model from W&B using run.use_artifact approach
         try:
-            api = wandb.Api()
-            artifact = api.artifact(args.wandb_artifact, type='model')
+            artifact = wandb_run.use_artifact(args.wandb_artifact, type='model')
             model_dir = artifact.download(root=model_download_dir)
             
             # Get tokenizer artifact (if specified, otherwise use the same as model)
             if args.wandb_tokenizer_artifact:
-                tokenizer_artifact = api.artifact(args.wandb_tokenizer_artifact, type='model')
+                tokenizer_artifact = wandb_run.use_artifact(args.wandb_tokenizer_artifact, type='model')
                 tokenizer_dir = tokenizer_artifact.download(root=model_download_dir)
             else:
                 tokenizer_dir = model_dir
@@ -73,8 +91,6 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(model_dir, device_map='auto', torch_dtype=torch.float16)
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
             
-            # Finish the run
-            wandb.finish()
             
         except Exception as e:
             print(f"Error downloading model from W&B: {e}")
@@ -107,10 +123,19 @@ def main():
     ]
 
     results = []
-    client = weave.init('intro-example')
+    client = weave.init(f"gsm8k_evaluation")
     for i in tqdm(range(datasize), desc='Evaluating'):
         example = dataset[i]
-        call = client.create_call(op=f"prompt_{i}", inputs={"model": args.wandb_artifact, "question": example['question'], "temperature":args.temp, "top_k":args.top_k,"top_p":args.top_p}, )
+        call = client.create_call(
+            op=f"prompt_{i}", 
+            inputs={
+                "model": args.wandb_artifact, 
+                "question": example['question'], 
+                "temperature":args.temp, 
+                "top_k":args.top_k,
+                "top_p":args.top_p,
+                "max_new_tokens": args.max_new_tokens
+            })
         if args.use_cot_prompt:
             input_text = "Q: {question}\nA: Let's think step by step.".format(question=example['question'])
         else:
@@ -132,10 +157,11 @@ def main():
                         temperature=args.temp, 
                         top_k=args.top_k,
                         top_p=args.top_p,
-                        max_new_tokens=512, 
+                        max_new_tokens=args.max_new_tokens, 
                         do_sample=True, 
                         pad_token_id=tokenizer.eos_token_id, 
-                        stopping_criteria=stopping_criteria_list)
+                        stopping_criteria=stopping_criteria_list
+                    )
                 output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 # Extract the final answer from the model's output
                 output_text = output_text.split("A:")[-1].strip() 
@@ -143,7 +169,12 @@ def main():
                 model_answers.append({'text': output_text, 'numeric': model_answer})
         else:
             with torch.no_grad():
-                outputs = model.generate(**inputs, max_new_tokens=512, pad_token_id=tokenizer.eos_token_id, stopping_criteria=stopping_criteria_list)
+                outputs = model.generate(
+                    **inputs, 
+                    max_new_tokens=args.max_new_tokens, 
+                    pad_token_id=tokenizer.eos_token_id,
+                    stopping_criteria=stopping_criteria_list
+                )
             output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
             output_text = output_text.split("A:")[-1].strip() 
             model_answer = extract_predicted_answer(output_text)
@@ -171,9 +202,13 @@ def main():
         if result['correct']:
             cnt += 1
     total = len(results)
+    accuracy = cnt/total
     print(f"Accuracy: {cnt} / {total} = {cnt / total :.4f}")
     
     results.append({'accuracy': cnt / total})
+    
+    # Log the accuracy to WandB
+    wandb.log({"accuracy": accuracy, "correct_count": cnt, "total_samples": total})
 
     os.makedirs('eval_results/zero_shot', exist_ok=True)
     
@@ -196,9 +231,8 @@ def main():
         json.dump(results, f, indent=4)
 
     print(f"Results saved to {result_file}")
-    
+
 
 if __name__ == '__main__':
     main()
-
 
