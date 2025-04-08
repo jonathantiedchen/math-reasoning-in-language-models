@@ -56,16 +56,16 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="y6mclQnCs_tMo2u_d1Yz-20" value="GSM8K Benchmarking" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Times New Roman;" vertex="1" parent="1">
-          <mxGeometry x="145" y="450" width="96" height="50" as="geometry" />
+          <mxGeometry x="145" y="420" width="96" height="50" as="geometry" />
         </mxCell>
         <mxCell id="y6mclQnCs_tMo2u_d1Yz-23" value="GSM8K Benchmarking" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Times New Roman;" vertex="1" parent="1">
-          <mxGeometry x="290" y="450" width="96" height="50" as="geometry" />
+          <mxGeometry x="290" y="420" width="96" height="50" as="geometry" />
         </mxCell>
         <mxCell id="y6mclQnCs_tMo2u_d1Yz-25" value="GSM8K Benchmarking" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Times New Roman;" vertex="1" parent="1">
-          <mxGeometry x="650" y="450" width="96" height="50" as="geometry" />
+          <mxGeometry x="650" y="420" width="96" height="50" as="geometry" />
         </mxCell>
         <mxCell id="y6mclQnCs_tMo2u_d1Yz-27" value="GSM8K Benchmarking" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Times New Roman;" vertex="1" parent="1">
-          <mxGeometry x="810" y="450" width="96" height="50" as="geometry" />
+          <mxGeometry x="810" y="420" width="96" height="50" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
