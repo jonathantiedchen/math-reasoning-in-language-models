@@ -1,4 +1,3 @@
-# code used from repository: https://github.com/tianlwang/eval_gsm8k/tree/main?tab=readme-ov-file#
 import torch
 import re
 import os
@@ -19,9 +18,11 @@ from datasets import load_dataset
 from collections import Counter
 import json
 import wandb
+import weave
 
 
-FEW_SHOT_PROMPT = """Q: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?
+# Original 8-shot prompt
+EIGHT_SHOT_PROMPT = """Q: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?
 A: There are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The answer is 6.
 
 Q: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
@@ -48,6 +49,22 @@ A: Olivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars
 Q: {question}
 A:"""
 
+# New 4-shot prompt for GPT-2
+FOUR_SHOT_PROMPT = """Q: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?
+A: There are 15 trees originally. Then there were 21 trees after some more were planted. So there must have been 21 - 15 = 6. The answer is 6.
+
+Q: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
+A: There are originally 3 cars. 2 more cars arrive. 3 + 2 = 5. The answer is 5.
+
+Q: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?
+A: Originally, Leah had 32 chocolates. Her sister had 42. So in total they had 32 + 42 = 74. After eating 35, they had 74 - 35 = 39. The answer is 39.
+
+Q: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?
+A: Olivia had 23 dollars. 5 bagels for 3 dollars each will be 5 x 3 = 15 dollars. So she has 23 - 15 dollars left. 23 - 15 is 8. The answer is 8.
+
+Q: {question}
+A:"""
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -62,6 +79,7 @@ def main():
     parser.add_argument("--max_new_tokens", type=float, default=512)
     parser.add_argument("--test_run", action="store_true", help="Run with only the first X problems")
     parser.add_argument("--num_problems", type=int, default=10, help="Number of problems to use in test run")
+    parser.add_argument("--use_cot_prompt", action="store_true", help="Enable Chain-of-Thought prompting")
     args = parser.parse_args()
 
 
@@ -75,7 +93,7 @@ def main():
 
     # Start a WandB run for logging metrics
     run = wandb.init(
-        project=f"gsm8k_evaluation",
+        project=f"gsm8k_evaluation_few_shot",
         name= f"gsm8k_evaluation_{model_artifact}",
         config={
             "model": model_artifact,
@@ -118,8 +136,6 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(model_dir, device_map='auto', torch_dtype=torch.float16)
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
             
-            # Finish the run
-            wandb.finish()
             
         except Exception as e:
             print(f"Error downloading model from W&B: {e}")
@@ -144,6 +160,15 @@ def main():
     datasize = len(dataset)
     print('gsm8k dataset size:', datasize) 
 
+    # Check if we're using a GPT-2 model to determine which prompt to use
+    is_gpt2 = "gpt2" in model_artifact.lower()
+    if is_gpt2:
+        print("Using 4-shot prompt for GPT-2 model")
+        prompt_template = FOUR_SHOT_PROMPT
+    else:
+        print("Using 8-shot prompt for non-GPT-2 model")
+        prompt_template = EIGHT_SHOT_PROMPT
+
     # Define a stopping condition for generation
     generation_util = [
         "Q:",
@@ -152,7 +177,9 @@ def main():
     ]
 
     results = []
-    client = weave.init(f"gsm8k_evaluation")
+
+    client = weave.init("gsm8k_evaluation_few_shot")
+        
     for i in tqdm(range(datasize), desc='Evaluating'):
         example = dataset[i]
         call = client.create_call(
@@ -165,11 +192,13 @@ def main():
                 "top_p":args.top_p,
                 "max_new_tokens": args.max_new_tokens
             })
-        input_text = FEW_SHOT_PROMPT.format(question=example['question'])
+                
+        input_text = prompt_template.format(question=example['question'])
         if i == 0:  # Print an example of the prompt for the first question
             print(f"EXAMPLE PROMPT: {input_text[:500]}...\n")
 
-        max_length = 1024 if "gpt2" in args.model.lower() else model.config.max_position_embeddings
+        # Set appropriate max_length based on model
+        max_length = 1024 if is_gpt2 else model.config.max_position_embeddings
         inputs = tokenizer(input_text, return_tensors="pt", truncation=True, max_length=max_length).to(model.device)
         ground_truth_answer = extract_ground_truth(example['answer'])
 
@@ -180,22 +209,14 @@ def main():
         if args.use_majority_vote:
             for _ in range(args.n_votes):
                 with torch.no_grad():
-                    if "gpt2" in args.model.lower(): 
                         outputs = model.generate(
                             **inputs, 
                             temperature=args.temp, 
-                            max_new_tokens=256, 
+                            max_new_tokens=args.max_new_tokens, 
                             do_sample=True, 
-                            pad_token_id=tokenizer.eos_token_id,
+                            pad_token_id=tokenizer.eos_token_id, 
                             stopping_criteria=stopping_criteria_list
                         )
-                    else: outputs = model.generate(
-                        **inputs, 
-                        temperature=args.temp, 
-                        max_new_tokens=args.max_new_tokens, 
-                        do_sample=True, 
-                        pad_token_id=tokenizer.eos_token_id, 
-                        stopping_criteria=stopping_criteria_list)
                 output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 # Extract the final answer from the model's output
                 output_text = output_text.split("A:")[-1].strip() 
@@ -203,20 +224,12 @@ def main():
                 model_answers.append({'text': output_text, 'numeric': model_answer})
         else:
             with torch.no_grad():
-                if "gpt2" in args.model.lower(): 
-                    outputs = model.generate(
-                        **inputs, 
-                        max_new_tokens=256, 
-                        pad_token_id=tokenizer.eos_token_id, 
-                        stopping_criteria=stopping_criteria_list
-                    )
-                else: 
                     outputs = model.generate(
                         **inputs, 
                         max_new_tokens=args.max_new_tokens, 
                         pad_token_id=tokenizer.eos_token_id, 
-                        stopping_criteria=stopping_criteria_list)
-
+                        stopping_criteria=stopping_criteria_list
+                    )
             output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
             output_text = output_text.split("A:")[-1].strip() 
             model_answer = extract_predicted_answer(output_text)
@@ -261,6 +274,12 @@ def main():
         model_name = args.model.split('/')[-1]
     
     result_file = f"eval_results/few_shot/{model_name}"
+    # Add shot count to the filename
+    if is_gpt2:
+        result_file += "_4shot"
+    else:
+        result_file += "_8shot"
+        
     if args.use_majority_vote:
         result_file += f"_maj1@{args.n_votes}_temp{args.temp}"
     if args.test_run:
@@ -272,6 +291,8 @@ def main():
 
     print(f"Results saved to {result_file}")
                 
-
+    # Finish the run
+    wandb.finish()
+    
 if __name__ == '__main__':
     main()
