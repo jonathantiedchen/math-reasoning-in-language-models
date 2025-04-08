@@ -47,7 +47,8 @@ def main():
     model_artifact = args.model if not args.wandb_artifact else args.wandb_artifact
     # Start a WandB run for logging metrics
     wandb_run = wandb.init(
-        project=f"gsm8k_evaluation",
+        entity = "master_thesis_math_lm",
+        project=f"gsm8k_evaluation_zero_shot",
         name= f"gsm8k_evaluation_{model_artifact}",
         config={
             "model": model_artifact,
@@ -123,7 +124,7 @@ def main():
     ]
 
     results = []
-    client = weave.init(f"gsm8k_evaluation")
+    client = weave.init("master_thesis_math_lm/gsm8k_evaluation_zero_shot")
     for i in tqdm(range(datasize), desc='Evaluating'):
         example = dataset[i]
         call = client.create_call(
@@ -232,6 +233,8 @@ def main():
 
     print(f"Results saved to {result_file}")
 
+    #Finish Run:
+    wandb.finish()
 
 if __name__ == '__main__':
     main()
