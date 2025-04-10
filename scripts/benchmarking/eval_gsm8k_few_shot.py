@@ -106,7 +106,8 @@ def main():
             "max_new_tokens": args.max_new_tokens
         }
     )
-    
+
+    ### LOAD MODEL
     if args.wandb_artifact:
         # Login to Weights & Biases (requires API key in environment variable or login)
         if not wandb.api.api_key:
@@ -148,7 +149,12 @@ def main():
     # Ensure pad token is set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
+    print(f"Model device: {next(model.parameters()).device}")
+
+
+
+    ### LOAD DATASET
     print('\nLoading dataset...')
     dataset = load_dataset('gsm8k', "main", split='test')
     
@@ -176,6 +182,7 @@ def main():
         "<|im_end|>"
     ]
 
+    ## EVALUATION LOOP
     results = []
 
     client = weave.init("gsm8k_evaluation_few_shot")

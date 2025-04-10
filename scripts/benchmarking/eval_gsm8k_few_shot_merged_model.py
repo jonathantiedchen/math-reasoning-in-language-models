@@ -159,7 +159,11 @@ def main():
     
     # Set model to evaluation mode
     model.eval()
+
+    model.to("cuda")
     
+    # Add after model loading to confirm device placement
+    print(f"Model device: {next(model.parameters()).device}")
     
     ### LOAD DATASET
     print('\nLoading dataset...')
