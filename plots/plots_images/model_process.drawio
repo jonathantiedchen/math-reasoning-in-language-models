@@ -71,6 +71,9 @@
         <mxCell id="y6mclQnCs_tMo2u_d1Yz-27" value="GSM8K Benchmarking" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Times New Roman;" parent="1" vertex="1">
           <mxGeometry x="810" y="420" width="96" height="50" as="geometry" />
         </mxCell>
+        <mxCell id="PtMnQD3EqCw8i7SjGw6G-1" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="265" width="900" height="245" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
