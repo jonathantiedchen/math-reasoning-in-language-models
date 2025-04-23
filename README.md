@@ -22,6 +22,10 @@ The research demonstrates:
 Evaluation results on GSM8K and other benchmarks are available in the `scripts/benchmarking/eval_results/` directory.
 Cudos to https://github.com/tianlwang/eval_gsm8k/tree/main for publishing code on how to benchmark language models on GSM8K, such transpacency is musch appreciated.
 
+Final benchmarking (including score and single prompt information) can be found in the according W&B projects: 
+- Few-Shot Evaluation: https://wandb.ai/master_thesis_math_lm/gsm8k_evaluation_few_shot/overview
+- Zero-Shot Evaluation: https://wandb.ai/master_thesis_math_lm/gsm8k_evaluation_zero_shot/overview
+
 ## 🛠️ Repository Structure
 
 - **scripts/**
@@ -32,6 +36,7 @@ Cudos to https://github.com/tianlwang/eval_gsm8k/tree/main for publishing code o
     - **gpt2/**: GPT-2 training scripts
     - **gpt2-large/**: GPT-2 Large training scripts
     - **mistral/**: Mistral-7B training scripts
+    - NOTE: We experienced issued on how the models were uploaded to W&B. In some cases only the adapters were uploaded to W&B. This introduced a significant complexity as the adapter had to me downladed and merged with the base models, resulting in different scripts for different models and training steps.
 - **utils/**: Utility functions for data processing, model helpers, and evaluation
 - **data/**: Data processing and dataset preparation (fetch data locally)
 
@@ -128,16 +133,6 @@ The repository includes GPU optimization experiments that test different trainin
 
 Results are available in the `scripts/gpu_experiment/` directory.
 
-## 📚 References
-
-- OpenWebMath dataset: [open-web-math/open-web-math](https://huggingface.co/datasets/open-web-math/open-web-math)
-- GSM8K: [gsm8k](https://huggingface.co/datasets/gsm8k)
-- MathInstruct: [TIGER-Lab/MathInstruct](https://huggingface.co/datasets/TIGER-Lab/MathInstruct)
-- Unsloth: [unsloth](https://github.com/unslothai/unsloth)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 📧 Contact
 
