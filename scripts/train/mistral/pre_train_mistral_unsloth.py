@@ -29,7 +29,6 @@ from utils.helper import get_device, TrainingSpeedCallback
 from utils.data import get_local_data
 
 
-
 def main():
     # Parse command-line arguments for testing mode and local data
     import argparse

@@ -43,13 +43,6 @@ def load_model(config,DEVICE):
 def extract_answer(text, eos=None):
     """
     Extracts a numerical answer from model output text, ensuring it returns a float.
-    
-    Args:
-        text (str): The model-generated text containing an answer
-        eos (str, optional): Custom end-of-sequence marker
-    
-    Returns:
-        float or None: The extracted numerical answer or None if not found
     """
     # Handle custom EOS marker if provided
     if eos and eos in text:
@@ -106,12 +99,6 @@ def is_correct_check(predicted, target):
 def clean_text_for_number_extraction(text):
     """
     Cleans text to prepare for number extraction.
-    
-    Args:
-        text (str): Text to clean
-    
-    Returns:
-        str: Cleaned text
     """
     # Remove thousand separators, currency symbols, and percentages
     text = re.sub(r'[$€£¥,]', '', text)
@@ -122,12 +109,6 @@ def clean_text_for_number_extraction(text):
 def convert_to_number(num_str):
     """
     Converts a string to the appropriate number type (int or float).
-    
-    Args:
-        num_str (str): String representing a number
-    
-    Returns:
-        int or float: The converted number
     """
     try:
         # Try to convert to int first if it's a whole number

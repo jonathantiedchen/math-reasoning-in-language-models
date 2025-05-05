@@ -276,18 +276,6 @@ def get_mixed_dataset_tokenized(config, tokenizer):
 def get_local_data(config):
     """
     Load and mix OpenWebMath and FineWeb datasets from local disk or HuggingFace hub.
-    
-    Args:
-        config: Dictionary containing configuration parameters:
-            - test_sample_size: Number of samples to use if in testing mode
-            - use_local_data: Whether to use local data or download from HF
-            - testing_mode: Whether we're in testing mode (using fewer samples)
-            - openwebmath_ratio: Ratio of samples from OpenWebMath (default 0.7)
-            - fineweb_ratio: Ratio of samples from FineWeb (default 0.3)
-            - total_samples: Total number of samples to use from both datasets combined
-    
-    Returns:
-        A dataset with mixed samples from both sources
     """
     total_samples = config.get('total_samples', 500000)
     openwebmath_ratio = config.get('openwebmath_ratio', 0.7)
