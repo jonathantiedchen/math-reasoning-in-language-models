@@ -217,7 +217,7 @@ wandb.log({
 tokenized_train_dataset = train_dataset.map(
     tokenize_function,
     batched=True,
-    batch_size=32,  # Process in smaller batches to avoid OOM during tokenization
+    batch_size=32, 
     remove_columns=train_dataset.column_names,
     desc="Tokenizing training dataset"
 )
@@ -239,7 +239,7 @@ torch.cuda.empty_cache()
 # Data collator for language modeling
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
-    mlm=False  # We're not doing masked language modeling
+    mlm=False 
 )
 
 # Create output directory

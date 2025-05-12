@@ -36,14 +36,14 @@ wandb.init(
 
 # Load pre-trained model and tokenizer from Weights & Biases
 model_name = "master_thesis_math_lm/gpt2-cl-final/gpt2-math-cl-final:v0"
-# First, download the model from W&B
+#  download the model from W&B
 wandb_artifact = wandb.use_artifact(model_name)
 model_dir = wandb_artifact.download()
 # Load the model and tokenizer from the downloaded directory
 tokenizer = GPT2Tokenizer.from_pretrained(model_dir)
 model = GPT2LMHeadModel.from_pretrained(model_dir)
 
-# GPT-2 tokenizer doesn't have a padding token by default
+# GPT-2 tokenizer doesn't have  padding token by default
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = model.config.eos_token_id
@@ -112,7 +112,7 @@ def tokenize_function(examples):
         texts,
         padding="max_length",
         truncation=True,
-        max_length=1024,  # Reduced from 1024 to save memory
+        max_length=1024, 
         return_tensors="pt"
     )
     

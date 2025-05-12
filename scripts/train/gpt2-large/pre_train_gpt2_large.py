@@ -1,8 +1,3 @@
-"""
-Train GPT-2 Large on OpenWebMath dataset using LoRA for efficient adaptation.
-Integrates Weights & Biases (wandb) for tracking.
-"""
-
 import os
 import torch
 import wandb
@@ -185,9 +180,8 @@ def main():
         data_collator=data_collator,
         train_dataset=train_dataset
     )
-    # Add CUDA memory configuration to avoid fragmentation
+
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-    # Enable cudnn benchmark for faster training
     torch.backends.cudnn.benchmark = True
     
     # Start training

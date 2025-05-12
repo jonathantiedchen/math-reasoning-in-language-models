@@ -1,12 +1,3 @@
-"""
-Train Mistral 7B on OpenWebMath dataset using LoRA.
-Integrates Weights & Biases (wandb) for tracking.
-Uses Unsloth.ai for faster and more efficient training.
-Explicitly adds EOS tokens to ensure proper sequence termination.
-Uses batched processing to minimize memory usage.
-Supports loading data from local directory.
-"""
-
 import os
 import torch
 import wandb
@@ -110,8 +101,8 @@ def main():
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,
         max_seq_length=config['max_seq_length'],
-        dtype=torch.bfloat16,  # Using bfloat16 for better training stability
-        load_in_4bit=True      # Unsloth works very well with 4-bit quantization
+        dtype=torch.bfloat16, 
+        load_in_4bit=True    
     )
     
     # Store the EOS token for use in data processing

@@ -1,7 +1,3 @@
-# GPT2 Large Model Training with Curriculum Learning and LoRA
-# This script trains a GPT2 model using curriculum learning on multiple datasets with LoRA (Low-Rank Adaptation).
-# Adjust linkes and paths for Weights&Biases (wandb) and model saving as needed.
-
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling

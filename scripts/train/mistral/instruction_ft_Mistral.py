@@ -160,7 +160,7 @@ def tokenize_function(examples):
         texts,
         padding="max_length",
         truncation=True,
-        max_length=1024,  # Adjust based on your GPU memory
+        max_length=1024,  
         return_tensors="pt"
     )
     
@@ -219,23 +219,22 @@ training_args = TrainingArguments(
     report_to="wandb",
     fp16=True,  # Keep mixed precision
     optim="adamw_torch_fused",  # Use memory-efficient optimizer
-    dataloader_pin_memory=True,  # Reduce CPU->GPU transfer overhead
+    dataloader_pin_memory=True,  
     gradient_checkpointing=True,  # Trade compute for memory
     group_by_length=True,  # Reduce padding by grouping similar lengths
 )
 
-# Initialize the Trainer with W&B callback for enhanced logging
+# Initialize the Trainer with W&B callback
 wandb_callback = WandbCallback()
 trainer = Trainer(
     model=model,
     args=training_args,
     data_collator=data_collator,
     train_dataset=tokenized_train_dataset,
-    eval_dataset=tokenized_val_dataset,  # Added validation dataset
+    eval_dataset=tokenized_val_dataset, 
     callbacks=[wandb_callback],
 )
 
-# Train the model
 print("Starting training...")
 trainer.train()
 print("Training completed!")
@@ -246,7 +245,7 @@ trainer.save_model(model_save_path)
 tokenizer.save_pretrained(model_save_path)
 print(f"Model saved to {model_save_path}")
 
-# Log the model to Weights & Biases
+# log the model to Weights & Biases
 artifact = wandb.Artifact(
     name="mistral-ft-final",
     type="model"

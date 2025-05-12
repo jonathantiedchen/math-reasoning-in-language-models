@@ -1,20 +1,12 @@
-"""
-Train Mistral 7B with curriculum learning approach using Weights & Biases pretrained model and SFTTrainer from Unsloth.
-Replace the pretrained_artifact_name value with your actual W&B artifact reference
-"""
-
 import os
 import torch
 import wandb
 import sys
 import pandas as pd
 from datasets import Dataset
-# Import Unsloth and SFTTrainer
 from unsloth import FastLanguageModel, is_bfloat16_supported
-# Import SFTTrainer and TrainingArguments from transformers
 from trl import SFTTrainer
 from transformers import TrainingArguments
-# Keep PEFT for printing trainable parameters
 from peft import TaskType
 
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), '../../..'))
@@ -28,14 +20,14 @@ from utils.data import get_cl_learning_data, prepare_datasets_qa
 wandb_config = {
     "model_name": "mistralai/Mistral-7B-v0.1",  # This will be replaced with W&B artifact
     "learning_rate": 2e-4,
-    "batch_size": 2,                          # Changed to match your requested config
+    "batch_size": 2,                          
     "max_steps": 5000,
-    #"num_train_epochs": 7,                    # Added per your request
-    "warmup_steps": 5,                        # Updated per your request
+    #"num_train_epochs": 7,                    
+    "warmup_steps": 5,                       
     "save_steps": 100,
     "eval_steps": 100,
-    "gradient_accumulation_steps": 4,         # Changed to match your requested config
-    "lr_scheduler": "linear",                 # Changed to linear per your request
+    "gradient_accumulation_steps": 4,         
+    "lr_scheduler": "linear",                 
     "training_approach": "curriculum_learning",
     "datasets": ["ASDiv", "ParaMAWPS", "DMath"],
     "samples_per_dataset": 5,
@@ -47,10 +39,10 @@ wandb_config = {
     "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     # Model specific parameters
     "max_seq_length": 2048,
-    "num_workers": 2,                         # Changed to match your requested config
-    "optim": "adamw_8bit",                    # Added per your request
+    "num_workers": 2,                        
+    "optim": "adamw_8bit",                    
     "weight_decay": 0.01,
-    "seed": 3407,                             # Changed per your request
+    "seed": 3407,                             
 }
 
 
@@ -59,7 +51,6 @@ device = get_device()
 print(f"Using device: {device}")
 
 # Download pretrained model from Weights & Biases
-# You'll need to specify the actual artifact name and version
 pretrained_artifact_name = "master_thesis_math_lm/mistral-math-final/mistral-7b-math-unsloth-model:v0"
 print(f"Downloading pretrained model from W&B: {pretrained_artifact_name}")
 
@@ -94,7 +85,6 @@ training_speed_tracker = TrainingSpeedCallback()
 
 # Iterate through datasets in curriculum order
 for dataset_name, dataset_samples in dataset_dict.items():
-    # Implement the naming logic: use "final" if dataset is DMath, otherwise use dataset_name
     dataset_name = "final" if dataset_name == "DMath" else dataset_name
     
     print(f"\n\n{'='*50}")
@@ -137,17 +127,16 @@ for dataset_name, dataset_samples in dataset_dict.items():
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
     
-    # Initialize SFTTrainer for this dataset (replacing UnslothTrainer)
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
         eval_dataset = test_dataset,
         
-        dataset_text_field="prompt",  # Field containing the text in your dataset
+        dataset_text_field="prompt",
         max_seq_length=wandb_config["max_seq_length"],
         dataset_num_proc=wandb_config["num_workers"],
-        packing=False,  # Can make training 5x faster for short sequences, but disabled as per your request
+        packing=False,
         args=TrainingArguments(
             output_dir=output_dir,
             overwrite_output_dir=True,
