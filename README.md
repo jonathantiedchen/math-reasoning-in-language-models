@@ -10,7 +10,7 @@ This research investigates how language models can be optimized for mathematical
 2. **Curriculum learning** across increasingly complex mathematical datasets
 3. **Instruction fine-tuning** for better alignment with mathematical prompts
 
-The project compares different model architectures (GPT-2, GPT-2 Large, Mistral-7B) and evaluates their performance on mathematical reasoning benchmarks.
+The project compares different model architectures (GPT-2 Small, GPT-2 Large, Mistral-7B) and evaluates their performance on mathematical reasoning benchmarks.
 
 ## 📊 Results
 
